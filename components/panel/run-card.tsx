@@ -10,7 +10,7 @@ import { Time } from "./time";
 
 const cardClass = (selected: boolean) =>
   cn(
-    "relative flex flex-col gap-2 rounded-lg border bg-secondary p-2.5 text-left transition-colors hover:border-input",
+    "relative flex flex-col gap-1.5 rounded-lg border bg-card p-3 text-left text-sm transition-colors hover:border-input",
     selected && "border-primary ring-1 ring-primary",
   );
 
@@ -77,11 +77,23 @@ export function StageCard({
           className="absolute inset-0 rounded-lg"
         />
       )}
-      <div className="flex items-center gap-1.5 font-mono text-xs text-faint">
+      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
         {latest?.status === "active" && <Spinner className="size-2.5" />}
-        {card.jobKey ?? card.id.slice(0, 8)}
+        <span className="font-mono">{card.jobKey ?? card.id.slice(0, 8)}</span>
+        <span className="ml-auto flex items-center gap-2.5">
+          {card.sourceLink && (
+            <a href={card.sourceLink.href} target="_blank" rel="noreferrer" className="relative underline-offset-2 hover:text-foreground hover:underline">
+              {card.sourceLink.label}
+            </a>
+          )}
+          {card.prUrl && (
+            <a href={card.prUrl} target="_blank" rel="noreferrer" className="relative font-mono underline-offset-2 hover:text-foreground hover:underline">
+              {prLabel(card.prUrl)}
+            </a>
+          )}
+        </span>
       </div>
-      <div className="line-clamp-2 font-medium">{card.title}</div>
+      <div className="line-clamp-2 font-medium leading-snug">{card.title}</div>
       {card.nudgedAt && (
         <p className="text-xs text-warning">
           Stuck · nudged <Time date={card.nudgedAt} />
@@ -93,46 +105,15 @@ export function StageCard({
         </p>
       )}
       {card.stage === "waiting" && card.question ? (
-        <p className="line-clamp-3 text-xs text-warning">{card.question}</p>
+        <p className="line-clamp-2 text-xs text-warning">{card.question}</p>
       ) : (
-        card.summary && (
-          <p className="line-clamp-2 text-xs text-muted-foreground">{card.summary}</p>
-        )
+        card.summary && <p className="line-clamp-2 text-xs text-muted-foreground">{card.summary}</p>
       )}
-      <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+      <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
         {latest && <ModelChip model={latest.model} />}
-        {card.attempt > 1 && (
-          <Badge variant="outline" className="rounded-md font-normal">
-            attempt {card.attempt}
-          </Badge>
-        )}
-        <AgentsAndCost
-          runs={card.attemptRuns}
-          allRuns={card.runs}
-          agents={agents}
-          budgetUsd={card.budgetUsd ?? undefined}
-        />
-        {machineName && <span>on {machineName}</span>}
-        {card.sourceLink && (
-          <a
-            href={card.sourceLink.href}
-            target="_blank"
-            rel="noreferrer"
-            className="relative underline-offset-2 hover:underline"
-          >
-            {card.sourceLink.label}
-          </a>
-        )}
-        {card.prUrl && (
-          <a
-            href={card.prUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="relative font-mono text-foreground underline-offset-2 hover:underline"
-          >
-            {prLabel(card.prUrl)}
-          </a>
-        )}
+        {card.attempt > 1 && <span>attempt {card.attempt}</span>}
+        <AgentsAndCost runs={card.attemptRuns} allRuns={card.runs} agents={agents} budgetUsd={card.budgetUsd ?? undefined} />
+        {machineName && <span className="ml-auto min-w-0 truncate">{machineName}</span>}
       </div>
     </div>
   );
