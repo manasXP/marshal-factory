@@ -18,11 +18,14 @@ export function PanelHeader({ title, status, note }: { title: string; status: Fe
         <SidebarTrigger className="-ml-1" />
         <Separator orientation="vertical" className="mx-2 data-[orientation=vertical]:h-4" />
         <h1 className="text-base font-medium">{title}</h1>
-        <div className="ml-auto flex items-center gap-2 text-sm text-muted-foreground">
-          <span className={cn("size-1.5 shrink-0 rounded-full", STATUS[status].dot)} />
-          {STATUS[status].label}
-          {note && <span>· {note}</span>}
-          <Separator orientation="vertical" className="mx-1 data-[orientation=vertical]:h-4" />
+        <div className="ml-auto flex items-center gap-4">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <span className={cn("size-1.5 shrink-0 rounded-full", STATUS[status].dot)} />
+            <span>
+              {STATUS[status].label}
+              {note && ` · ${note}`}
+            </span>
+          </div>
           <ThemeToggle />
         </div>
       </div>
