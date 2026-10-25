@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -11,7 +12,7 @@ const STATUS: Record<FeedStatus, { dot: string; label: string }> = {
 };
 
 /** The page title beside the sidebar toggle, and how fresh the page's data is on the right. */
-export function PanelHeader({ title, status, note }: { title: string; status: FeedStatus; note?: string }) {
+export function PanelHeader({ title, status, note, actions }: { title: string; status: FeedStatus; note?: string; actions?: ReactNode }) {
   return (
     <header className="flex h-(--header-height) shrink-0 items-center gap-2 border-b">
       <div className="flex w-full items-center gap-1 px-4 lg:gap-2 lg:px-6">
@@ -26,6 +27,7 @@ export function PanelHeader({ title, status, note }: { title: string; status: Fe
               {note && ` · ${note}`}
             </span>
           </div>
+          {actions}
           <ThemeToggle />
         </div>
       </div>

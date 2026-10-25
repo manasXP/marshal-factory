@@ -227,6 +227,23 @@ export function linearClient(apiKey: string, { fetch: fetchImpl = realFetch, sle
       }
     },
 
+    /** Creates the issue under `id`; a replay finds the issue the first create made. */
+    async createIssue(input: { id: string; teamId: string; stateId: string; labelIds: string[]; title: string; description: string }) {
+      const created = z.object({ identifier: z.string(), url: z.string() });
+      try {
+        const data = await gql(
+          `mutation($input: IssueCreateInput!) { issueCreate(input: $input) { issue { identifier url } } }`,
+          { input },
+          z.object({ issueCreate: z.object({ issue: created }) }),
+        );
+        return data.issueCreate.issue;
+      } catch (error) {
+        if (!(error instanceof LinearError && error.code === "conflict")) throw error;
+        const data = await gql(`query($id: String!) { issue(id: $id) { identifier url } }`, { id: input.id }, z.object({ issue: created }));
+        return data.issue;
+      }
+    },
+
     /** Returns false when a comment with this id already exists. */
     async comment(issueId: string, id: string, body: string) {
       try {

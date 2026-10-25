@@ -6,10 +6,10 @@ import { jobs } from "../../db/schema";
 import { loadConfig, type FactoryLimits } from "../config";
 import type { Stage } from "../events";
 import { attemptBranch } from "../factory";
-import { commentId, linearClient, type LinearClient } from "../linear";
+import { commentId, linearClient, type LinearClient, type LinearOptions } from "../linear";
 import { hmacHex, sameHex, type IntentDraft, type Verdict } from "../webhooks";
 import { jobId } from "./shapes";
-import type { Job as AnyJob, Reply, ResumePlan, SourceAdapter, SourceWebhook } from "./types";
+import type { Job as AnyJob, FileDraft, FiledJob, Reply, ResumePlan, SourceAdapter, SourceWebhook } from "./types";
 
 type Job = AnyJob<"linear">;
 
@@ -326,4 +326,33 @@ export function createLinearAdapter(load: () => LinearDeps | Promise<LinearDeps>
   };
 }
 
-export const linear = createLinearAdapter(runtimeDeps);
+/**
+ * Files a job as a Todo issue with the factory label, under an id derived from the request, so a
+ * double submit or a retry finds the first issue. Linear's webhook then brings it to the runner.
+ */
+export function linearFiler(apiKey: string, teamKey: string, label: string, options?: LinearOptions) {
+  const client = linearClient(apiKey, options);
+  return async (draft: FileDraft): Promise<FiledJob> => {
+    const team = await client.team(teamKey);
+    const todo = team.states.find((s) => s.type === "unstarted" && s.name === "Todo") ?? team.states.find((s) => s.type === "unstarted");
+    if (!todo) throw new Error(`Linear team ${teamKey} has no Todo state`);
+    const issue = await client.createIssue({
+      id: commentId("panel-job", draft.requestId),
+      teamId: team.id,
+      stateId: todo.id,
+      labelIds: [await client.labelId(team.id, label)],
+      title: draft.title,
+      description: draft.description,
+    });
+    return { key: issue.identifier, url: issue.url };
+  };
+}
+
+// The panel files jobs from Vercel, which has no config file, so filing reads its key from the env.
+const fileFromEnv = (draft: FileDraft) => {
+  const key = process.env.LINEAR_API_KEY;
+  if (!key) throw new Error("LINEAR_API_KEY is not set, so the panel cannot file jobs in Linear");
+  return linearFiler(key, process.env.FACTORY_TEAM_KEY ?? "FAC", process.env.FACTORY_LABEL ?? "factory")(draft);
+};
+
+export const linear: SourceAdapter<"linear"> = { ...createLinearAdapter(runtimeDeps), file: fileFromEnv };

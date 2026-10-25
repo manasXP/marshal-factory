@@ -6,6 +6,7 @@ import { Board } from "./board";
 import { boardCards } from "./cards";
 import { attemptBranch } from "@/lib/factory";
 import { groupBy, spendOf } from "./format";
+import { NewJobButton } from "./new-job-button";
 import { OtherActivity } from "./other-activity";
 import { RunDetail } from "./run-detail";
 import { useFeed, type Feed } from "./sealed";
@@ -67,6 +68,7 @@ export function LivePanel({
         title={view === "board" ? "Board" : "Other activity"}
         status={status}
         note={`${runRows.filter((r) => r.status === "active").length} active`}
+        actions={view === "board" ? <NewJobButton /> : undefined}
       />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <StatsStrip runs={runRows} agentsBySession={agentsBySession} startOfToday={startOfToday} />

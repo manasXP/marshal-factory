@@ -66,4 +66,9 @@ export interface SourceAdapter<S extends JobSource> {
   reopen(job: Job<S>): Promise<void>;
   /** The noun phrase naming the job in messages to the thread, such as "Linear issue FAC-7". */
   describe(job: Pick<Job<S>, "key">): string;
+  /** Files a new job in the source as a person would; the source's own intake then claims it. */
+  file?(draft: FileDraft): Promise<FiledJob>;
 }
+
+export type FileDraft = { requestId: string; title: string; description: string };
+export type FiledJob = { key: string; url: string };
