@@ -1,3 +1,7 @@
+import { createHash } from "node:crypto";
+import { mkdir, readdir, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { eq, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { z } from "zod";
@@ -7,6 +11,7 @@ import { loadConfig, type FactoryLimits } from "../config";
 import type { Stage } from "../events";
 import { attemptBranch } from "../factory";
 import { commentId, linearClient, type LinearClient, type LinearOptions } from "../linear";
+import { forbidInTest } from "../test-mode";
 import { hmacHex, sameHex, type IntentDraft, type Verdict } from "../webhooks";
 import { jobId } from "./shapes";
 import type { Job as AnyJob, FileDraft, FiledJob, Reply, ResumePlan, SourceAdapter, SourceWebhook } from "./types";
@@ -355,4 +360,72 @@ const fileFromEnv = (draft: FileDraft) => {
   return linearFiler(key, process.env.FACTORY_TEAM_KEY ?? "FAC", process.env.FACTORY_LABEL ?? "factory")(draft);
 };
 
-export const linear: SourceAdapter<"linear"> = { ...createLinearAdapter(runtimeDeps), file: fileFromEnv };
+// Images pasted into Linear live on its upload host behind the API key, which the agent does not have.
+const UPLOAD_IMAGE = /!\[([^\]]*)\]\((https:\/\/uploads\.linear\.app\/[^\s)]+)\)/g;
+const IMAGE_TYPES: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" };
+const MAX_IMAGES = 10;
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+
+export const ATTACHMENTS_DIR = join(homedir(), ".cache/marshal-factory/attachments");
+
+/**
+ * Downloads the Linear uploads that text embeds as images into `dir` and points the text at the
+ * files, with a list the agent is told to open first. A file already downloaded is reused, so a
+ * relaunch costs nothing. An image that cannot be fetched keeps its link and a note; it never
+ * blocks the launch.
+ */
+export async function localizeLinearImages(text: string, { apiKey, dir, fetch: fetchImpl = fetch }: { apiKey: string; dir: string; fetch?: typeof fetch }) {
+  const urls = [...new Set([...text.matchAll(UPLOAD_IMAGE)].map((m) => m[2]!))].slice(0, MAX_IMAGES);
+  if (urls.length === 0) return text;
+  await mkdir(dir, { recursive: true });
+  const existing = await readdir(dir);
+  const saved = new Map<string, string>();
+  const failed = new Map<string, string>();
+  for (const url of urls) {
+    const name = createHash("sha256").update(url).digest("hex").slice(0, 16);
+    const have = existing.find((f) => f.startsWith(`${name}.`));
+    if (have) {
+      saved.set(url, join(dir, have));
+      continue;
+    }
+    try {
+      const res = await fetchImpl(url, { headers: { authorization: apiKey }, signal: AbortSignal.timeout(20_000) });
+      const ext = IMAGE_TYPES[(res.headers.get("content-type") ?? "").split(";")[0]!.trim()];
+      if (!res.ok) throw new Error(`Linear answered ${res.status}`);
+      if (!ext) throw new Error("not a PNG, JPEG, WebP or GIF image");
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      if (bytes.byteLength > MAX_IMAGE_BYTES) throw new Error("larger than 10 MB");
+      const path = join(dir, `${name}.${ext}`);
+      await writeFile(path, bytes);
+      saved.set(url, path);
+    } catch (error) {
+      failed.set(url, error instanceof Error ? error.message : String(error));
+    }
+  }
+  const rewritten = text.replace(UPLOAD_IMAGE, (whole, alt: string, url: string) => {
+    const path = saved.get(url);
+    if (path) return `[image: ${path}]`;
+    const reason = failed.get(url);
+    return reason ? `${whole} (the factory could not download this image: ${reason})` : whole;
+  });
+  if (saved.size === 0) return rewritten;
+  return [
+    rewritten,
+    "",
+    "## Images",
+    "",
+    `This text refers to ${saved.size === 1 ? "an image" : `${saved.size} images`}, saved on this machine. Open each one with the Read tool before you start; they are part of the spec.`,
+    "",
+    ...[...new Set(saved.values())].map((path) => `- ${path}`),
+  ].join("\n");
+}
+
+const uploadFetch: typeof fetch = (input, init) => {
+  forbidInTest("the Linear upload host");
+  return fetch(input, init);
+};
+
+const localizeImages = (job: { key: string }, text: string) =>
+  localizeLinearImages(text, { apiKey: loadConfig().linearApiKey, dir: join(ATTACHMENTS_DIR, job.key), fetch: uploadFetch });
+
+export const linear: SourceAdapter<"linear"> = { ...createLinearAdapter(runtimeDeps), file: fileFromEnv, localizeImages };

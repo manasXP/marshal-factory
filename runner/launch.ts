@@ -5,7 +5,8 @@ import { z } from "zod";
 import { forbidInTest } from "../lib/test-mode";
 import { PENDING } from "./binding";
 import { thisMachine } from "./heartbeat";
-import { bindThread, claimLaunch, config, factoryCheckouts, machineInFlight, pendingLaunches, releaseLaunch, toLaunch } from "./ops";
+import type { JobSource } from "../lib/sources/types";
+import { bindThread, claimLaunch, config, factoryCheckouts, machineInFlight, pendingLaunches, releaseLaunch, toLaunch, withLocalImages } from "./ops";
 
 const run = promisify(execFile);
 const T3 = process.env.T3CODE_CLI_PATH ?? "t3";
@@ -93,7 +94,7 @@ async function recoverPending(checkouts: ReadonlyMap<string, string>) {
   return recovered;
 }
 
-type LaunchEntry = { key: string; repo: string; branch: string; threadTitle: string; message: string };
+type LaunchEntry = { key: string; source: JobSource; repo: string; branch: string; threadTitle: string; message: string };
 
 export type LaunchDeps = {
   claim: (key: string, marker: string) => Promise<boolean>;
@@ -166,7 +167,9 @@ export async function launchQueued(onWorktree: (check: Record<string, unknown>) 
   const slot = { id: machine.id, repos: [...checkouts.keys()], maxInFlight: config.factory.maxInFlight };
   const launched = await launchEntries(pending, {
     claim: (key, marker) => claimLaunch(key, marker, slot),
-    start: (entry) => startThread(checkouts.get(entry.repo)!, entry.branch, entry.threadTitle, entry.message),
+    // After the claim, so a job another machine wins downloads nothing here.
+    start: async (entry) =>
+      startThread(checkouts.get(entry.repo)!, entry.branch, entry.threadTitle, await withLocalImages(entry.source, entry.key, entry.message)),
     bind: bindThread,
     release: releaseLaunch,
     now: Date.now,

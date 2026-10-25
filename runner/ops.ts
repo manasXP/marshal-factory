@@ -229,7 +229,7 @@ export async function resumeAnswered() {
 
     if (alive) {
       try {
-        await threads.send(job.t3_thread_id!, resumeMessage(source.describe(job), plan.question, plan.answer));
+        await threads.send(job.t3_thread_id!, await withLocalImages(job.source, job.key, resumeMessage(source.describe(job), plan.question, plan.answer)));
       } catch (error) {
         await db
           .update(jobs)
@@ -595,6 +595,19 @@ function launchMessage(job: Job) {
   ].join("\n");
 }
 
+/**
+ * The text a thread gets, with the source's private images saved on this machine and listed. A
+ * failure here keeps the original text: the agent can still work, and a launch is never blocked.
+ */
+export async function withLocalImages(source: JobSource, key: string, text: string) {
+  try {
+    return (await sourceFor(source).localizeImages?.({ key }, text)) ?? text;
+  } catch (error) {
+    console.log(JSON.stringify({ at: new Date().toISOString(), event: "images:error", key, error: error instanceof Error ? error.message : String(error) }));
+    return text;
+  }
+}
+
 export async function toLaunch() {
   const rows = await db
     .select()
@@ -611,6 +624,7 @@ export async function toLaunch() {
     .orderBy(asc(jobs.claimed_at), asc(jobs.key));
   return parseJobs(rows).map((job) => ({
     key: job.key,
+    source: job.source,
     repo: job.repo,
     branch: attemptBranch(job.key, job.attempt),
     threadTitle: `${job.key} ${job.title}`,

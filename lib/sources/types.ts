@@ -66,6 +66,11 @@ export interface SourceAdapter<S extends JobSource> {
   reopen(job: Job<S>): Promise<void>;
   /** The noun phrase naming the job in messages to the thread, such as "Linear issue FAC-7". */
   describe(job: Pick<Job<S>, "key">): string;
+  /**
+   * Rewrites the source's private image links in text sent to a thread into files on this machine,
+   * since the agent cannot fetch them. Returns the text unchanged when it has none.
+   */
+  localizeImages?(job: Pick<Job<S>, "key">, text: string): Promise<string>;
   /** Files a new job in the source as a person would; the source's own intake then claims it. */
   file?(draft: FileDraft): Promise<FiledJob>;
 }
