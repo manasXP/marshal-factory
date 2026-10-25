@@ -73,7 +73,10 @@ export interface SourceAdapter<S extends JobSource> {
   localizeImages?(job: Pick<Job<S>, "key">, text: string): Promise<string>;
   /** Files a new job in the source as a person would; the source's own intake then claims it. */
   file?(draft: FileDraft): Promise<FiledJob>;
+  /** Stores an image where the source keeps uploads, for a job about to be filed; returns its markdown. */
+  uploadImage?(image: ImageFile): Promise<string>;
 }
 
 export type FileDraft = { requestId: string; title: string; description: string };
+export type ImageFile = { filename: string; contentType: string; bytes: Uint8Array<ArrayBuffer> };
 export type FiledJob = { key: string; url: string };

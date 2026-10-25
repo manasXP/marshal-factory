@@ -14,7 +14,7 @@ import { commentId, linearClient, type LinearClient, type LinearOptions } from "
 import { forbidInTest } from "../test-mode";
 import { hmacHex, sameHex, type IntentDraft, type Verdict } from "../webhooks";
 import { jobId } from "./shapes";
-import type { Job as AnyJob, FileDraft, FiledJob, Reply, ResumePlan, SourceAdapter, SourceWebhook } from "./types";
+import type { Job as AnyJob, FileDraft, FiledJob, ImageFile, Reply, ResumePlan, SourceAdapter, SourceWebhook } from "./types";
 
 type Job = AnyJob<"linear">;
 
@@ -353,6 +353,21 @@ export function linearFiler(apiKey: string, teamKey: string, label: string, opti
   };
 }
 
+/** Uploads an image to Linear's storage and returns the markdown that embeds it, as Linear's editor would. */
+export function linearUploader(apiKey: string, options?: LinearOptions & { put?: typeof fetch }) {
+  const client = linearClient(apiKey, options);
+  const put = options?.put ?? fetch;
+  return async (image: ImageFile) => {
+    const upload = await client.fileUpload(image.contentType, image.filename, image.bytes.byteLength);
+    const headers = new Headers({ "content-type": image.contentType, "cache-control": "public, max-age=31536000" });
+    for (const { key, value } of upload.headers) headers.set(key, value);
+    const res = await put(upload.uploadUrl, { method: "PUT", headers, body: image.bytes, signal: AbortSignal.timeout(30_000) });
+    if (!res.ok) throw new Error(`Linear's storage answered ${res.status}`);
+    const alt = image.filename.replace(/[[\]\n]/g, " ").trim() || "image";
+    return `![${alt}](${upload.assetUrl})`;
+  };
+}
+
 // The panel files jobs from Vercel, which has no config file, so filing reads its key from the env.
 const fileFromEnv = (draft: FileDraft) => {
   const key = process.env.LINEAR_API_KEY;
@@ -428,4 +443,10 @@ const uploadFetch: typeof fetch = (input, init) => {
 const localizeImages = (job: { key: string }, text: string) =>
   localizeLinearImages(text, { apiKey: loadConfig().linearApiKey, dir: join(ATTACHMENTS_DIR, job.key), fetch: uploadFetch });
 
-export const linear: SourceAdapter<"linear"> = { ...createLinearAdapter(runtimeDeps), file: fileFromEnv, localizeImages };
+const uploadFromEnv = (image: ImageFile) => {
+  const key = process.env.LINEAR_API_KEY;
+  if (!key) throw new Error("LINEAR_API_KEY is not set, so the panel cannot upload images to Linear");
+  return linearUploader(key)(image);
+};
+
+export const linear: SourceAdapter<"linear"> = { ...createLinearAdapter(runtimeDeps), file: fileFromEnv, uploadImage: uploadFromEnv, localizeImages };

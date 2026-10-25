@@ -14,3 +14,9 @@ export type NewJob = z.infer<typeof newJobSchema>;
 export type NewJobOutcome =
   | { ok: true; identifier: string; url: string }
   | { ok: false; status: 400 | 403 | 502; message: string };
+
+/** Images a job can carry. Vercel takes at most 4.5 MB per request, so one upload stays under it. */
+export const JOB_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"] as const;
+export const MAX_JOB_IMAGE_BYTES = 4 * 1024 * 1024;
+
+export type ImageUploadOutcome = { ok: true; markdown: string } | { ok: false; status: 400 | 403 | 413 | 502; message: string };
