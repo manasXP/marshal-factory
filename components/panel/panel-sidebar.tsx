@@ -31,7 +31,7 @@ export function PanelSidebar(props: ComponentProps<typeof Sidebar>) {
           <SidebarMenuItem>
             <SidebarMenuButton asChild size="lg" tooltip="Marshal Factory">
               <Link href="/">
-                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-[conic-gradient(from_210deg,var(--primary),var(--violet),var(--info),var(--primary))]" />
+                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-sm font-semibold text-primary-foreground">M</div>
                 <span className="font-semibold">Marshal Factory</span>
               </Link>
             </SidebarMenuButton>

@@ -1,5 +1,6 @@
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { cn } from "@/lib/utils";
 import type { FeedStatus } from "./sealed";
 
@@ -21,6 +22,8 @@ export function PanelHeader({ title, status, note }: { title: string; status: Fe
           <span className={cn("size-1.5 shrink-0 rounded-full", STATUS[status].dot)} />
           {STATUS[status].label}
           {note && <span>· {note}</span>}
+          <Separator orientation="vertical" className="mx-1 data-[orientation=vertical]:h-4" />
+          <ThemeToggle />
         </div>
       </div>
     </header>
