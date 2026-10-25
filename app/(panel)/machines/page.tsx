@@ -17,7 +17,7 @@ async function Panel() {
 
 export default function MachinesPage() {
   return (
-    <Suspense fallback={<div className="h-screen" />}>
+    <Suspense fallback={<div className="h-full" />}>
       <Panel />
     </Suspense>
   );

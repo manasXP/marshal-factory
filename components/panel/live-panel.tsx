@@ -6,9 +6,10 @@ import { Board } from "./board";
 import { boardCards } from "./cards";
 import { attemptBranch } from "@/lib/factory";
 import { groupBy, spendOf } from "./format";
+import { OtherActivity } from "./other-activity";
 import { RunDetail } from "./run-detail";
 import { useFeed, type Feed } from "./sealed";
-import { Sidebar } from "./sidebar";
+import { PanelHeader } from "./panel-header";
 import { StatsStrip } from "./stats-strip";
 import { useAfterHydration } from "./time";
 
@@ -22,13 +23,17 @@ export type DetailProps = {
   audit: { feed: Feed<AuditRow>; path: string } | undefined;
 };
 
+export type PanelView = "board" | "activity";
+
 export function LivePanel({
+  view,
   jobs,
   runs,
   agents,
   machines,
   detail,
 }: {
+  view: PanelView;
   jobs: Feed<JobRow>;
   runs: Feed<RunRow>;
   agents: Feed<AgentRow>;
@@ -46,10 +51,10 @@ export function LivePanel({
     [agentRows],
   );
   const cards = useMemo(() => boardCards(jobRows, runRows), [jobRows, runRows]);
-  const claimed = new Set(jobRows.map((j) => j.key));
-  const unstaged = runRows.filter(
-    (r) => r.stage === null && !(r.job_key && claimed.has(r.job_key)),
-  );
+  const unstaged = useMemo(() => {
+    const claimed = new Set(jobRows.map((j) => j.key));
+    return runRows.filter((r) => r.stage === null && !(r.job_key && claimed.has(r.job_key)));
+  }, [jobRows, runRows]);
   const startOfToday = useAfterHydration(() => new Date().setHours(0, 0, 0, 0), 0);
   const selectedRun = detail && runRows.find((r) => r.session_id === detail.sessionId);
   const selectedJob = selectedRun?.job_key
@@ -57,28 +62,20 @@ export function LivePanel({
     : undefined;
 
   return (
-    <div className="grid h-screen grid-cols-[220px_1fr]">
-      <Sidebar
-        active="board"
-        cardCount={cards.length}
-        unstagedCount={unstaged.length}
-        liveSessions={runRows.filter((r) => r.status === "active").length}
+    <>
+      <PanelHeader
+        title={view === "board" ? "Board" : "Other activity"}
         status={status}
+        note={`${runRows.filter((r) => r.status === "active").length} active`}
       />
-      <main className="flex min-h-0 min-w-0 flex-col">
-        <header className="flex items-center border-b px-5.5 py-3.5">
-          <span className="text-muted-foreground">marshal /&nbsp;</span>
-          <h1 className="text-sm font-semibold">Factory board</h1>
-        </header>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <StatsStrip runs={runRows} agentsBySession={agentsBySession} startOfToday={startOfToday} />
         <div className={`grid min-h-0 flex-1 ${selectedRun ? "grid-cols-[1fr_420px]" : "grid-cols-1"}`}>
-          <Board
-            cards={cards}
-            unstaged={unstaged}
-            agentsBySession={agentsBySession}
-            selected={detail?.sessionId}
-            machines={machineById}
-          />
+          {view === "board" ? (
+            <Board cards={cards} agentsBySession={agentsBySession} selected={detail?.sessionId} machines={machineById} />
+          ) : (
+            <OtherActivity runs={unstaged} agentsBySession={agentsBySession} selected={detail?.sessionId} />
+          )}
           {selectedRun && detail && (
             <RunDetail
               key={detail.sessionId}
@@ -105,7 +102,7 @@ export function LivePanel({
             />
           )}
         </div>
-      </main>
-    </div>
+      </div>
+    </>
   );
 }

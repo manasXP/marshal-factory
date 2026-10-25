@@ -149,7 +149,7 @@ export function RunCard({
 }) {
   return (
     <Link
-      href={`/?run=${run.session_id}`}
+      href={`/activity?run=${run.session_id}`}
       scroll={false}
       className={cn(cardClass(selected), run.status === "ended" && "opacity-60")}
     >

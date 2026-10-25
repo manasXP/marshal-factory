@@ -15,7 +15,7 @@ import {
   type Known,
 } from "@/lib/machine";
 import { useFeed, type Feed } from "./sealed";
-import { Sidebar } from "./sidebar";
+import { PanelHeader } from "./panel-header";
 import { Time, useNow } from "./time";
 
 const CLOCK_TICK_MS = 30_000;
@@ -185,14 +185,9 @@ export function Machines({ machines }: { machines: Feed<MachineRow> }) {
     now === null ? null : rows.filter((m) => isOnline(m.last_seen_at, now)).length;
 
   return (
-    <div className="grid h-screen grid-cols-[220px_1fr]">
-      <Sidebar active="machines" status={status} onlineMachines={onlineMachines} />
-      <main className="flex min-h-0 min-w-0 flex-col">
-        <header className="flex items-center border-b px-5.5 py-3.5">
-          <span className="text-muted-foreground">marshal /&nbsp;</span>
-          <h1 className="text-sm font-semibold">Machines</h1>
-        </header>
-        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+    <>
+      <PanelHeader title="Machines" status={status} note={onlineMachines === null ? undefined : `${onlineMachines} online`} />
+      <div className="min-h-0 flex-1 overflow-y-auto p-5">
           {rows.length === 0 ? (
             <Empty className="border">
               <EmptyHeader>
@@ -209,8 +204,7 @@ export function Machines({ machines }: { machines: Feed<MachineRow> }) {
               ))}
             </div>
           )}
-        </div>
-      </main>
-    </div>
+      </div>
+    </>
   );
 }

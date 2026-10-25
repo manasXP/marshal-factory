@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import { LivePanel, type DetailProps } from "@/components/panel/live-panel";
+import { LivePanel, type DetailProps, type PanelView } from "@/components/panel/live-panel";
 import { RealtimeRoot } from "@/components/panel/realtime-root";
 import {
   agentsOverviewQuery,
@@ -33,7 +33,7 @@ async function loadDetail(raw: string | undefined): Promise<DetailProps | undefi
   return { sessionId, agents, events, stages, stagesPath, audit: auditFeed };
 }
 
-async function Panel({ searchParams }: Pick<PageProps<"/">, "searchParams">) {
+async function Panel({ view, searchParams }: { view: PanelView; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const { run } = await searchParams;
   const [jobs, runs, agents, machines, detail] = await Promise.all([
     load(jobsQuery()),
@@ -44,15 +44,16 @@ async function Panel({ searchParams }: Pick<PageProps<"/">, "searchParams">) {
   ]);
   return (
     <RealtimeRoot>
-      <LivePanel jobs={jobs} runs={runs} agents={agents} machines={machines} detail={detail} />
+      <LivePanel view={view} jobs={jobs} runs={runs} agents={agents} machines={machines} detail={detail} />
     </RealtimeRoot>
   );
 }
 
-export default function Home(props: PageProps<"/">) {
+/** The board and the other-activity page share their data, their live feeds and run detail. */
+export function PanelPage({ view, searchParams }: { view: PanelView; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   return (
-    <Suspense fallback={<div className="h-screen" />}>
-      <Panel searchParams={props.searchParams} />
+    <Suspense fallback={<div className="h-full" />}>
+      <Panel view={view} searchParams={searchParams} />
     </Suspense>
   );
 }

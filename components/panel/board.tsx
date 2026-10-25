@@ -1,19 +1,16 @@
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import type { AgentRow, MachineRow, RunRow } from "@/db/schema";
 import { STAGES } from "@/lib/events";
 import type { BoardCard } from "./cards";
-import { RunCard, StageCard } from "./run-card";
+import { StageCard } from "./run-card";
 import { STAGE_META } from "./stages";
 
 export function Board({
   cards,
-  unstaged,
   agentsBySession,
   selected,
   machines,
 }: {
   cards: readonly BoardCard[];
-  unstaged: readonly RunRow[];
   agentsBySession: Map<string, AgentRow[]>;
   selected: string | undefined;
   machines: ReadonlyMap<string, MachineRow>;
@@ -54,34 +51,6 @@ export function Board({
             </div>
           );
         })}
-      </section>
-
-      <section id="other-activity" className="flex flex-col gap-2.5">
-        <h2 className="text-xs font-semibold tracking-wider text-faint uppercase">
-          Other activity · {unstaged.length}
-        </h2>
-        {unstaged.length === 0 ? (
-          <Empty className="border">
-            <EmptyHeader>
-              <EmptyTitle>No other sessions</EmptyTitle>
-              <EmptyDescription>
-                Claude Code sessions that never report a stage appear here as soon
-                as the reporter hook sends their first event.
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        ) : (
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(236px,1fr))] gap-2.5">
-            {unstaged.map((run) => (
-              <RunCard
-                key={run.session_id}
-                run={run}
-                agents={agentsBySession.get(run.session_id) ?? []}
-                selected={run.session_id === selected}
-              />
-            ))}
-          </div>
-        )}
       </section>
     </div>
   );
