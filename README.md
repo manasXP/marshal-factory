@@ -4,19 +4,7 @@ A software factory that turns Linear issues into pull requests while you watch.
 
 You label an issue in Linear, or file one from the panel. A runner on your Mac picks it up within seconds and starts a [T3 Code](https://github.com/pingdotgg/t3code) thread for it on its own branch, `factory/<issue>`. That thread runs Claude Code with PStack and works the issue on its own: triage, investigation, implementation, verification, and a pull request. Every stage, subagent, model and dollar spent streams live to a web panel. When the agent needs a decision, it asks on the Linear issue and continues once you reply. It never merges. You review the PR and merge it from the panel or from GitHub.
 
-```
-Linear / GitHub webhooks ──► Neon Function ──► intents (Postgres)
-                                                    │ Realtime
-runner daemon on your Mac ◄─────────────────────────┘
-  └─ one T3 thread per issue, branch factory/FAC-123
-        (Claude Code + PStack + the factory playbook)
-              ├─ hooks ───────────┐  sessions, subagents, models, tokens
-              └─ factory_report ──┤  stage, status, summary
-                                  ▼
-                 Neon (ingest Function + Postgres + Realtime)
-                                  ▼
-            panel on Vercel: board · run timeline · agents · machines
-```
+![The whole factory: sources, Neon, your Mac, Vercel and GitHub, with the numbered path one ticket takes](docs/images/factory-diagram.jpg)
 
 The pieces:
 
@@ -213,6 +201,8 @@ New jobs go to the first repo in `factory.repos`. For now, a single runner works
 Within seconds the issue moves to In Progress, a comment says the factory took it, and a card appears on the board. Write the issue the way you would for a colleague who can't ask questions: what's wrong or what you want, and how you'll know it's done. Images on the issue are downloaded and given to the thread.
 
 **Watch it.** Cards move through Queued, Triage, Investigating, Implementing, Verifying and PR. Open a card to see the stage history, the agents and subagents, the models, and the spend. **Other activity** lists Claude Code sessions that report no factory stage, such as work you start by hand in a target repo. **Machines** shows each runner's Mac, its load, and its T3 projects.
+
+![The panel's board: runs grouped by stage, each card showing its ticket, model, spend against the cap, and machine](docs/images/panel-board.png)
 
 **Answer questions.** When the issue is ambiguous or something blocks the run, the card moves to Waiting, and the question is posted as a comment on the Linear issue, usually with options to pick from. Reply with a comment on the issue. The thread continues with your answer.
 
