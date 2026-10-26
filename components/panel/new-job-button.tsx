@@ -67,10 +67,13 @@ export function NewJobButton() {
 
   // Each image goes to Linear as it is added; its markdown joins the description, as Linear's editor would write it.
   const addImages = (files: File[]) => {
+    const draft = form.getValues("requestId");
     for (const file of files) {
       const id = crypto.randomUUID();
       setImages((current) => [...current, { id, name: file.name, preview: URL.createObjectURL(file), status: "uploading" }]);
       void uploadImage(file).then((outcome) => {
+        // The dialog was closed or reopened while this uploaded; the image belongs to a draft that is gone.
+        if (form.getValues("requestId") !== draft) return;
         if (outcome.ok) {
           const description = form.getValues("description").trimEnd();
           form.setValue("description", description ? `${description}\n\n${outcome.markdown}` : outcome.markdown, { shouldValidate: true });
