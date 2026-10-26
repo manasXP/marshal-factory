@@ -20,6 +20,7 @@ import { claimConflict, conflictMessage, unclaimedRunsWithPr } from "../lib/conf
 import { attemptBranch } from "../lib/factory";
 import { nudgeMessage, watch, type ThreadState } from "../lib/watchdog";
 import { isTracked } from "../lib/harness";
+import { readHarnesses } from "../lib/t3-state";
 import { readSettings, resolveHarness, type HarnessChoice } from "../lib/settings";
 import { forbidInTest } from "../lib/test-mode";
 import { runWithInput } from "../lib/exec";
@@ -273,6 +274,13 @@ export async function watchdog() {
     .from(jobs)
     .where(and(await mine(), inArray(jobs.stage, IN_FLIGHT), or(isNotNull(jobs.t3_thread_id), isNotNull(jobs.session_id))));
   const actions: string[] = [];
+  // Tracking depends on the driver, not the instance id: a renamed Claude Code instance still reports.
+  let drivers = new Map<string, string>();
+  try {
+    drivers = new Map(readHarnesses().map((h) => [h.id, h.driver]));
+  } catch {
+    // Unknown instances fall back to their id, which equals the driver for T3's default instances.
+  }
   for (const { job, lastEventAt } of working) {
     const now = new Date();
     const action = watch(
@@ -282,7 +290,7 @@ export async function watchdog() {
         nudgedAt: job.nudged_at,
         nudgedStage: job.nudged_stage,
         thread: await threads.state(job.t3_thread_id),
-        tracked: isTracked(job.provider ?? config.factory.provider),
+        tracked: isTracked(drivers.get(job.provider ?? config.factory.provider) ?? job.provider ?? config.factory.provider),
         now,
       },
       config.factory,
