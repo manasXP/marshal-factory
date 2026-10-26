@@ -381,7 +381,7 @@ const IMAGE_TYPES: Record<string, string> = { "image/png": "png", "image/jpeg": 
 const MAX_IMAGES = 10;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
-export const ATTACHMENTS_DIR = join(homedir(), ".cache/marshal-factory/attachments");
+export const ATTACHMENTS_DIR = join(/* turbopackIgnore: true */ homedir(), ".cache/marshal-factory/attachments");
 
 /**
  * Downloads the Linear uploads that text embeds as images into `dir` and points the text at the
@@ -392,15 +392,16 @@ export const ATTACHMENTS_DIR = join(homedir(), ".cache/marshal-factory/attachmen
 export async function localizeLinearImages(text: string, { apiKey, dir, fetch: fetchImpl = fetch }: { apiKey: string; dir: string; fetch?: typeof fetch }) {
   const urls = [...new Set([...text.matchAll(UPLOAD_IMAGE)].map((m) => m[2]!))].slice(0, MAX_IMAGES);
   if (urls.length === 0) return text;
-  await mkdir(dir, { recursive: true });
-  const existing = await readdir(dir);
+  // Only the runner downloads images; the panel bundles this file but never writes here.
+  await mkdir(/* turbopackIgnore: true */ dir, { recursive: true });
+  const existing = await readdir(/* turbopackIgnore: true */ dir);
   const saved = new Map<string, string>();
   const failed = new Map<string, string>();
   for (const url of urls) {
     const name = createHash("sha256").update(url).digest("hex").slice(0, 16);
     const have = existing.find((f) => f.startsWith(`${name}.`));
     if (have) {
-      saved.set(url, join(dir, have));
+      saved.set(url, join(/* turbopackIgnore: true */ dir, have));
       continue;
     }
     try {
@@ -410,7 +411,7 @@ export async function localizeLinearImages(text: string, { apiKey, dir, fetch: f
       if (!ext) throw new Error("not a PNG, JPEG, WebP or GIF image");
       const bytes = new Uint8Array(await res.arrayBuffer());
       if (bytes.byteLength > MAX_IMAGE_BYTES) throw new Error("larger than 10 MB");
-      const path = join(dir, `${name}.${ext}`);
+      const path = join(/* turbopackIgnore: true */ dir, `${name}.${ext}`);
       await writeFile(path, bytes);
       saved.set(url, path);
     } catch (error) {
@@ -441,7 +442,7 @@ const uploadFetch: typeof fetch = (input, init) => {
 };
 
 const localizeImages = (job: { key: string }, text: string) =>
-  localizeLinearImages(text, { apiKey: loadConfig().linearApiKey, dir: join(ATTACHMENTS_DIR, job.key), fetch: uploadFetch });
+  localizeLinearImages(text, { apiKey: loadConfig().linearApiKey, dir: join(/* turbopackIgnore: true */ ATTACHMENTS_DIR, job.key), fetch: uploadFetch });
 
 const uploadFromEnv = (image: ImageFile) => {
   const key = process.env.LINEAR_API_KEY;
