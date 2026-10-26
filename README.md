@@ -1,70 +1,271 @@
 # marshal-factory
 
-A software factory on top of Claude Code, PStack and T3 Code, with a browser panel for supervising it.
+A software factory that turns Linear issues into pull requests while you watch.
 
-Linear and GitHub webhooks reach a Neon Function, which records what they ask for. A runner daemon on the Mac acts on that within seconds. Each issue gets its own T3 thread, which runs PStack on a `factory/<issue>` worktree branch. Claude Code hooks and a small `factory_report` MCP server stream every run's stage, subagents, models and cost to Neon Postgres. The panel shows that live through Neon Realtime.
+You label an issue in Linear, or file one from the panel. A runner on your Mac picks it up within seconds and starts a [T3 Code](https://github.com/pingdotgg/t3code) thread for it on its own branch, `factory/<issue>`. That thread runs Claude Code with PStack and works the issue on its own: triage, investigation, implementation, verification, and a pull request. Every stage, subagent, model and dollar spent streams live to a web panel. When the agent needs a decision, it asks on the Linear issue and continues once you reply. It never merges. You review the PR and merge it from the panel or from GitHub.
 
 ```
-Linear / GitHub webhooks ──► Neon Function /webhooks ──► intents (Postgres)
-                                                              │ Realtime
-runner daemon (launchd) ◄─────────────────────────────────────┘
-  └─ t3 thread start per issue, branch factory/FAC-123
-                                   │
-            T3 thread (Claude Code + PStack + factory playbook)
-              ├─ hooks ──────────────┐  session, subagents, models, tokens
-              └─ factory_report MCP ─┤  stage, status, summary
-                                     ▼
-                     Neon (Function /ingest + Postgres + Realtime)
-                                     ▼
-                Next.js + shadcn panel
-          board · run timeline · agent tree · inbox · metrics · Open in T3
+Linear / GitHub webhooks ──► Neon Function ──► intents (Postgres)
+                                                    │ Realtime
+runner daemon on your Mac ◄─────────────────────────┘
+  └─ one T3 thread per issue, branch factory/FAC-123
+        (Claude Code + PStack + the factory playbook)
+              ├─ hooks ───────────┐  sessions, subagents, models, tokens
+              └─ factory_report ──┤  stage, status, summary
+                                  ▼
+                 Neon (ingest Function + Postgres + Realtime)
+                                  ▼
+            panel on Vercel: board · run timeline · agents · machines
 ```
 
-## Build order
+The pieces:
 
-1. Neon backend: append-only `events` with `runs` and `agents` projections, and an ingest Function. `issues` and `gates` follow in later phases.
-2. Claude Code hooks that post session and subagent events, verified against a normal T3 thread.
-3. `factory_report` MCP server and a factory playbook extending PStack's feature and bug-fix playbooks.
-4. Panel UI: board, run view, agent tree, inbox.
-5. Linear intake: webhooks into the ingest Function, acted on by the runner daemon.
+- **Panel** (`app/`, `components/`): a Next.js app on Vercel. It shows the board and each run's timeline and cost, and lets you file jobs and merge PRs. Only the owner can sign in.
+- **Ingest Function** (`functions/ingest/`): a Neon Function that receives the Linear and GitHub webhooks and the reporter's events, and writes them to Postgres.
+- **Runner** (`runner/`): a Bun daemon on your Mac, run by launchd. It is the only part that touches T3, git and the GitHub API.
+- **Reporter** (`hooks/`, `mcp/`): Claude Code hooks and a small MCP server, installed into each target repo. They send the run's progress to the ingest Function.
+- **Playbook** (`playbooks/factory.md`): the instructions every factory thread follows. It extends PStack's bug-fix and feature playbooks.
 
-## Operating it
+## What you need
 
-- **Wire a target repo.** `bun scripts/install-target.ts <repo>` adds the reporter hooks, the `factory-report` MCP server and `.agents/playbooks/factory.md`, all pointing at this checkout. Re-running changes nothing. Commit the result in the target repo.
-- **GitHub App.** The runner reads PRs as the GitHub App `marshal-factory-ski043`, not as a `gh` login. `bun scripts/setup-github-app.ts` opens a local page that sends the app manifest to GitHub. Click **Create GitHub App**, then pick `ski043/factory-demo` and `ski043/marshal-factory` and click **Install**. The script stores the app id, key and webhook secret in `~/.config/marshal-factory/github-app.json` with mode 600, and records the installation. `lib/github/app.ts` mints a one-hour installation token per repo from that file and reuses it until five minutes before it expires; `lib/github/pulls.ts` reads and merges PRs with it. T3 threads still push and open PRs with the user's own `gh` and git credentials.
-- **Webhooks.** `bun scripts/install-webhooks.ts` creates the Linear webhook (team FAC, Issue and Comment), pointing at the ingest Function, and records its id under `factory.webhooks`. GitHub deliveries (`pull_request`, `push`, `issues`) come from the GitHub App's webhook, which the manifest points at the `main` Function. The Function checks the signatures (`Linear-Signature` with a webhookTimestamp no older than a minute, `X-Hub-Signature-256` with the app's webhook secret), stores every delivery under its delivery id so a redelivery does nothing, and records an intent: claim, stop, answer, merged or recheck_conflicts. Other GitHub events, such as `installation` or `issues`, are stored with no intent. The Linear and ingest secrets live in `.env.local`; `neon.ts` reads the app's webhook secret from `GITHUB_APP_WEBHOOK_SECRET` or else from `github-app.json`, so `neon deploy --env .env.local --no-env-pull` fails until the app exists. That deploy only adds Function env vars that are missing: it keeps a value already set, even when `neon.ts` now gives another, and keeps a name `neon.ts` no longer lists. To change a value, such as a rotated secret, run `neon functions deploy ingest --src functions/ingest/index.ts --env NAME=VALUE`, and check the names with `neon functions get ingest -E`, which lists names only. Set `FACTORY_TEAM_KEY` and `FACTORY_LABEL` there too when the config uses another team or label.
-- **Runner.** `runner/index.ts` is the only process that touches T3, git and the GitHub API. It subscribes to open intents and to issues with an unsynced stage through Neon Realtime and acts through `runner/ops.ts`. It claims and launches (`t3 thread start --worktree origin/main` after a fetch, and logs whether the worktree really sits on origin/main), stops, resumes on an answer, writes merges back and rechecks conflicts after a push to main. Every `tickSeconds` (90) a plain timer claims into free slots, checks open PRs for merges and conflicts, and runs the watchdog, the cost cap, usage reconcile and write-back, with cleanup hourly. On startup it reconciles everything a missed webhook could have changed, so downtime only delays work. `bun scripts/install-runner.ts` installs it as the LaunchAgent `com.marshal-factory.runner` (restarts on exit, log `~/Library/Logs/marshal-factory/runner.log`); `--uninstall` unloads it. `bun runner/index.ts --once` runs one reconcile by hand.
-- **Write-back.** Stage `pr` moves the Linear issue to In Review with the PR link, `waiting` posts the question, and a merged PR moves it to Done. `failed` posts the reason, moves the issue back to Todo, and swaps the `factory` label for `factory-failed`, so the runner does not pick it up again in a loop.
-- **Retry.** Adding `factory` back to a failed issue claims it again as a new attempt on its own branch (`factory/FAC-7-a2`) with a fresh budget: the cap counts each attempt on its own, and the card shows the attempt, its spend against the cap, and the total of all attempts. Comment ids are derived from the stage event, so a replay never posts twice.
-- **Config.** `~/.config/marshal-factory/config.json` holds `ingestUrl`, `secret` and `linearApiKey`. An optional `factory` object overrides the limits in `lib/config.ts`: `teamKey`, `label`, `maxInFlight` (2), `stuckAfterMinutes` (30), `stoppedGraceMinutes` (2), `failAfterNudgeMinutes` (30), `budgetUsd` (5), `cleanupGraceDays` (3), `subagentIdleHours` (6), `tickSeconds` (90), `inventoryMinutes` (10), `machineId`, `t3StatePath`, `provider` and `model` for new threads, `repos`, which the installer fills, and `webhooks`, which install-webhooks fills. The GitHub App lives in `~/.config/marshal-factory/github-app.json` (`MARSHAL_FACTORY_GITHUB_APP` overrides the path).
-- **Machines.** Each runner reports its Mac in the `machines` table, keyed by the Mac's `IOPlatformUUID` (`factory.machineId` overrides it, so a test runner keeps its own row). On every tick, from its own timer outside the serial queue, it writes a heartbeat with CPU load, memory in use, free disk and in-flight against max capacity. A collector that fails reports `unknown` for its field and never skips the beat. At startup and every `inventoryMinutes` (10) it also collects the runner commit, whether T3 is up and its version and environment id, the T3 Connect state, the T3 projects and the `origin` of each factory repo. The inventory is written only when it differs from the last one written. T3 projects come from T3's state database, opened read-only (`factory.t3StatePath`, default `$T3CODE_HOME/userdata/statev2.sqlite`). When that fails, the runner runs `t3 thread list --project <repo>` for each factory repo, and when every probe fails the field is `unknown`. Jobs record the machine that launched them in `jobs.machine_id`.
-- **Cleanup.** The runner walks the `factory/*` branches, worktrees and T3 threads of every repo in `factory.repos`. A merged issue's worktree and local branch go right away, and a failed one's after `cleanupGraceDays`. Anything with uncommitted files, commits no remote holds (unless the PR merged that exact head), or a running thread is held and listed under `cleaned.held`. Idle Claude Code subagent worktrees under `<repo>/.claude/worktrees/` go the same way, with commits no remote has pushed to `factory-salvage/<branch>` first. The `t3` CLI cannot archive threads, so the runner lists the threads left behind under `cleaned.archive` in its log; archive them in T3 by hand or from an agent with `t3_thread_organize`.
-- **Budget.** Ingest answers every batch with the spend of the issues it touched, main sessions plus subagents across all runs, and the reporter caches it under `~/.cache/marshal-factory/spend/`. On factory branches the reporter also sends a usage snapshot at most every 30 s mid-turn. The synchronous `hooks/budget.ts` PreToolUse hook blocks every tool except `report_stage` once the cached spend reaches `budgetUsd`, and tells the agent to report `failed`. It reads only local files and returns in about 20 ms; sessions off a factory branch pass straight through. The runner fails a working issue over its cap in case the thread does not.
-- **Merge conflicts.** A push to main makes the runner wait for GitHub to recompute mergeability, then read every open factory PR through the GitHub App. When a PR in stage `pr` turns conflicting, its thread is told to merge `origin/main`, resolve, rerun checks and report `pr` again, and the run moves back to Implementing. This happens once per PR head.
-- **Watchdog.** The runner's timer checks issues in a working stage. One that has been quiet for `stuckAfterMinutes`, or whose thread stopped and stayed quiet for `stoppedGraceMinutes`, gets one nudge asking the thread to continue and report its stage. If it is still stuck in the same stage `failAfterNudgeMinutes` later, the issue fails, Linear gets the reason, and the slot frees up. A thread T3 no longer has fails at once.
+Accounts:
 
-## Panel access and deploys
+- **Linear**, with a team for factory work and a personal API key.
+- **GitHub**, for the target repo and a GitHub App the setup creates for you.
+- **Neon**, for Postgres, Auth, Realtime and the ingest Function.
+- **Vercel**, for the panel.
 
-- **Sign-in.** Neon Auth (`auth: true` in `neon.ts`) holds the users. `proxy.ts` sends a request without a session to `/auth/sign-in`, answers `/api/*` with 401, and shows a 403 page to any account that is not the owner. The owner is an account whose email is in `FACTORY_OWNER_EMAILS` (comma-separated, case-insensitive) and verified. An unset or empty list admits nobody. `lib/live-queries.ts` checks the owner again before it seals a query, so only the owner ever holds a Realtime credential.
-- **Owner account.** Sign-up stays off, and an email counts only after its owner enters the code Neon Auth mails. To create the owner on `main`:
-  1. Turn on sign-up with code verification: `neon neon-auth config email-password update --branch main --enabled --email-verification-method otp --require-email-verification --send-verification-email-on-sign-up --send-verification-email-on-sign-in --auto-sign-in-after-verification --disable-sign-up false`.
-  2. Open `/auth/sign-up` on the panel and create the account with an address from `FACTORY_OWNER_EMAILS`.
-  3. Enter the 6-digit code from the email (sender `auth@mail.myneon.app`, valid 15 minutes). The panel signs you in and opens the board.
-  4. Turn sign-up off again: `neon neon-auth config email-password update --branch main --disable-sign-up true`.
+On the Mac that runs the factory:
 
-  An account that signs in before it is verified gets a new code on the sign-in page.
-- **Environment.** The panel needs `DATABASE_URL`, `DATABASE_URL_UNPOOLED`, `NEON_AUTH_BASE_URL`, `NEON_AUTH_COOKIE_SECRET` (`openssl rand -base64 32`), `NEON_REALTIME_URL`, `NEXT_PUBLIC_NEON_REALTIME_URL`, `NEON_REALTIME_SECRET` and `FACTORY_OWNER_EMAILS`. `next build` fails without the cookie secret. A preview build needs none of the three Realtime variables.
-- **Realtime origins.** The allowed origins are `*`, because Vercel preview URLs change per branch. The sealed query is the credential, and only the owner can get one.
-- **Machines.** `/machines` lists every Mac whose runner reports in, with online state computed in the browser from `last_seen_at`, its resources, its T3 projects and the factory repos.
-- **Vercel.** A merge to `main` deploys production, and a push to a PR branch deploys a preview. `vercel.json` migrates before `bun run build`, so production migrates the production branch and each preview migrates its own Neon branch, and runs functions in `fra1` next to the database. `scripts/migrate-guard.ts` runs first and stops a non-production build whose `DATABASE_URL` or `DATABASE_URL_UNPOOLED` points at the production branch (`PRODUCTION_ENDPOINTS` in `lib/migrate-guard.ts`; add new production endpoints there). The project's Ignored Build Step, `[ -z "$DATABASE_URL" ]`, cancels a preview that has no database yet. A merge that changes the runner still needs `bun scripts/install-runner.ts` in the live checkout after `git pull`.
-- **Previews.** A preview build (`VERCEL_ENV=preview`) shows the data from its branch but does not subscribe to Realtime, and the sidebar says "Live updates off in previews". Its Neon branch has no Realtime config that the build can read. Production keeps live updates.
+- macOS. The runner installs as a launchd agent and identifies the Mac by its hardware UUID.
+- [Bun](https://bun.sh), git, and the [GitHub CLI](https://cli.github.com) signed in (`gh auth login`). Threads push branches and open PRs with your own git and `gh` credentials.
+- Claude Code with the PStack plugin installed.
+- T3 Code, running, with its `t3` command line tool. The installer looks for it at `~/.t3/bin/t3`, then on your `PATH`, or you can set `T3CODE_CLI_PATH`.
+- The `neon` CLI, signed in, and the `vercel` CLI.
+- `jq` and `openssl`, used by a few commands below.
 
-## Testing
+## Install
 
-`bun run test:regressions` runs every `scripts/*-regressions.ts` against a Neon branch it creates from production for that run, and deletes the branch when the run ends. The branch expires after 2 hours, so a crashed run cannot leak one. Pass a name prefix to run a subset, for example `bun run test:regressions ingest`. It needs the `neon` CLI signed in, and the project id from `.neon` or `NEON_PROJECT_ID`.
+These steps set up one factory: one Neon project, one panel, and one Mac running the runner. Do them in order. Several steps depend on values an earlier step creates.
 
-Each script starts with `import "./test-guard"`, which exits before any write unless the harness started it and `DATABASE_URL` points at the harness's branch. The `.env.local` database is always refused. During a regression the real Linear client, the GitHub App, `t3 thread` commands and the deployed ingest URL throw (`lib/test-mode.ts`); tests use fakes such as `threads` in `runner/ops.ts` and `github` in `lib/github/pulls.ts`.
+### 1. Clone the factory
 
-## Research
+```sh
+git clone https://github.com/<you>/marshal-factory.git ~/code/marshal-factory
+cd ~/code/marshal-factory
+bun install
+```
 
-Background reports from the initial investigation live in [`docs/research/`](docs/research/).
+Fork the repo first if you want Vercel to deploy your copy. This checkout is the **live checkout**. The runner, and the hooks installed into your target repos, run code straight from this path. Keep it on `main` and don't move it. Do development work in a separate clone or worktree.
+
+### 2. Change the two values tied to the original setup
+
+- `scripts/setup-github-app.ts`: change the manifest's `name` (`marshal-factory-ski043`) and `url`. GitHub App names are unique across GitHub, so you need your own, such as `marshal-factory-<you>`.
+- `lib/migrate-guard.ts`: `PRODUCTION_ENDPOINTS` names the production database endpoint, so a preview build can never migrate production. You fill it in at step 4.
+
+### 3. Prepare Linear
+
+In the Linear team you want the factory to work in:
+
+- Note the team key, the prefix of its issue ids. The defaults assume `FAC`.
+- Make sure the team has the workflow states **Todo**, **In Progress**, **In Review** and **Done**. The factory moves issues between them by name.
+- Create a label named `factory`. Only issues with this label in an unstarted state (such as Todo) are picked up.
+- Create a personal API key under Settings → Security & access.
+
+If your team key or label differs, set them in every place listed under [Settings](#settings).
+
+### 4. Create the Neon backend
+
+Create a project, link this checkout to it, and turn on Realtime for `main`:
+
+```sh
+neon projects create --name marshal-factory
+neon init --no-agent-setup      # links this directory to the project; writes .neon
+neon realtime enable --branch main --allowed-origin '*'
+```
+
+Create `.env.local` with the secrets you choose yourself:
+
+```sh
+cat > .env.local <<EOF
+FACTORY_INGEST_SECRET=$(openssl rand -hex 32)
+LINEAR_WEBHOOK_SECRET=$(openssl rand -hex 32)
+NEON_AUTH_COOKIE_SECRET=$(openssl rand -base64 32)
+FACTORY_OWNER_EMAILS=you@example.com
+LINEAR_API_KEY=<your Linear API key>
+FACTORY_TEAM_KEY=FAC
+FACTORY_LABEL=factory
+EOF
+chmod 600 .env.local
+```
+
+Deploy `neon.ts` to `main`, which turns on Neon Auth and deploys the ingest Function. The GitHub App doesn't exist yet, so pass a placeholder for its webhook secret. Step 6 replaces it.
+
+```sh
+GITHUB_APP_WEBHOOK_SECRET=pending neon deploy --branch main --env .env.local --no-env-pull
+```
+
+Pull the values Neon generated (connection strings, Auth, Realtime, and the Function's URL), then create the tables:
+
+```sh
+neon env pull --branch main
+echo "NEXT_PUBLIC_NEON_REALTIME_URL=$(grep '^NEON_REALTIME_URL=' .env.local | cut -d= -f2-)" >> .env.local
+bun run db:migrate
+```
+
+`.env.local` now also holds `DATABASE_URL`, `DATABASE_URL_UNPOOLED`, `NEON_AUTH_BASE_URL`, `NEON_REALTIME_URL`, `NEON_REALTIME_SECRET` and `NEON_FUNCTION_INGEST_BASE_URL`.
+
+Finally, put the production endpoint id into `PRODUCTION_ENDPOINTS` in `lib/migrate-guard.ts`. It is the `ep-…` part of the host in `DATABASE_URL`, without `-pooler`.
+
+### 5. Write the runner's config
+
+The runner and the reporter read `~/.config/marshal-factory/config.json`:
+
+```sh
+mkdir -p ~/.config/marshal-factory
+set -a; source .env.local; set +a
+jq -n --arg key "$LINEAR_API_KEY" --arg url "$NEON_FUNCTION_INGEST_BASE_URL/ingest" --arg secret "$FACTORY_INGEST_SECRET" \
+  '{linearApiKey: $key, ingestUrl: $url, secret: $secret, factory: {teamKey: "FAC", label: "factory"}}' \
+  > ~/.config/marshal-factory/config.json
+chmod 600 ~/.config/marshal-factory/config.json
+```
+
+`secret` must equal `FACTORY_INGEST_SECRET`, or ingest rejects the reporter's events. [Settings](#settings) lists the optional limits you can add under `factory`.
+
+### 6. Create the GitHub App
+
+The runner reads and merges PRs as a GitHub App, not as your `gh` login:
+
+```sh
+bun scripts/setup-github-app.ts
+```
+
+A browser page opens and sends the app manifest to GitHub. Click **Create GitHub App**, pick the repos the factory may work in, and click **Install**. The script saves the app's id, private key and webhook secret to `~/.config/marshal-factory/github-app.json` (mode 600). You can add repos to the installation later in GitHub's app settings.
+
+Now give the ingest Function the real webhook secret:
+
+```sh
+neon functions deploy ingest --branch main --src functions/ingest/index.ts \
+  --env GITHUB_APP_WEBHOOK_SECRET="$(jq -r .webhook_secret ~/.config/marshal-factory/github-app.json)"
+```
+
+### 7. Create the Linear webhook
+
+```sh
+bun scripts/install-webhooks.ts
+```
+
+This registers a webhook on your team (Issue and Comment events) that points at the ingest Function, and records its id in the config. Running it again reuses the existing webhook.
+
+### 8. Deploy the panel
+
+Import the repo into Vercel as a Next.js project. `vercel.json` already sets the build command (migration guard, then migrations, then build) and the region. Then:
+
+- Add these environment variables for Production. Mark the secrets as Sensitive.
+  - `DATABASE_URL`, `DATABASE_URL_UNPOOLED`
+  - `NEON_AUTH_BASE_URL`, `NEON_AUTH_COOKIE_SECRET`
+  - `NEON_REALTIME_URL`, `NEXT_PUBLIC_NEON_REALTIME_URL`, `NEON_REALTIME_SECRET`
+  - `FACTORY_OWNER_EMAILS`
+  - `LINEAR_API_KEY`, used by the New job form
+  - `FACTORY_TEAM_KEY` and `FACTORY_LABEL`, if they differ from `FAC` and `factory`
+- Set the Ignored Build Step to `[ -z "$DATABASE_URL" ]`, so previews without a database are skipped. To get previews with their own Neon branch, connect Neon's Vercel integration. Each preview then migrates its own branch, and the migration guard stops any preview that points at production.
+
+Deploy, then create your owner account. Sign-up is off by default. The [owner account steps](docs/operations.md#panel-access-and-deploys) turn it on briefly, so you can register with an address from `FACTORY_OWNER_EMAILS` and confirm it with the emailed code.
+
+### 9. Start the runner
+
+```sh
+bun scripts/install-runner.ts
+tail -f ~/Library/Logs/marshal-factory/runner.log
+```
+
+This installs the LaunchAgent `com.marshal-factory.runner`. It starts at login and restarts if it exits. Within a minute the log shows `realtime` `live` and a `heartbeat`, and your Mac appears under **Machines** in the panel. The runner still needs a repo to work in, which the next section adds.
+
+## Add your repo
+
+A target repo is any git repo whose `origin` is on GitHub and whose default branch is `main`. The GitHub App must be installed on it.
+
+```sh
+bun scripts/install-target.ts ~/code/my-app
+```
+
+This writes three things into the repo, all pointing at your live checkout:
+
+- `.claude/settings.json`: the reporter hooks and the budget hook.
+- `.mcp.json`: the `factory-report` MCP server.
+- `.agents/playbooks/factory.md`: the factory playbook.
+
+It merges with any settings the repo already has, adds `.claude/**` to the ESLint ignores when it can, and adds the repo to `factory.repos` in your config. Running it again changes nothing.
+
+Commit those files and push them to `main`. Every thread starts from a fresh worktree of `origin/main`, so a thread can only see the playbook and hooks once they're on `main`.
+
+Then restart the runner so it loads the new repo: `bun scripts/install-runner.ts --uninstall && bun scripts/install-runner.ts`.
+
+New jobs go to the first repo in `factory.repos`. For now, a single runner works one target repo.
+
+## Use it
+
+**Start a job.** Either:
+
+- In Linear, add the `factory` label to an issue in Todo.
+- In the panel, click **New job**, then write a title, a description, and optionally paste or drop images. The panel files the issue in Linear for you.
+
+Within seconds the issue moves to In Progress, a comment says the factory took it, and a card appears on the board. Write the issue the way you would for a colleague who can't ask questions: what's wrong or what you want, and how you'll know it's done. Images on the issue are downloaded and given to the thread.
+
+**Watch it.** Cards move through Queued, Triage, Investigating, Implementing, Verifying and PR. Open a card to see the stage history, the agents and subagents, the models, and the spend. **Other activity** lists Claude Code sessions that report no factory stage, such as work you start by hand in a target repo. **Machines** shows each runner's Mac, its load, and its T3 projects.
+
+**Answer questions.** When the issue is ambiguous or something blocks the run, the card moves to Waiting, and the question is posted as a comment on the Linear issue, usually with options to pick from. Reply with a comment on the issue. The thread continues with your answer.
+
+**Review and merge.** At the PR stage, the issue moves to In Review with a link to the pull request. Review it as you would any PR. You can merge from the panel or on GitHub. Either way, the issue moves to Done and the worktree is cleaned up. If main moves on and the PR conflicts, the factory tells the thread to merge main and fix it.
+
+**Stop a job.** Remove the `factory` label, or cancel the issue. The runner stops the thread.
+
+**When it fails.** A job fails when the agent gives up, when it stays stuck after one nudge, or when it hits its budget (5 USD per attempt by default). The reason is posted on the issue, the issue goes back to Todo, and the label changes to `factory-failed`. To retry, add `factory` again. The retry runs on a new branch (`factory/FAC-7-a2`) with a fresh budget. A failed job's worktree is kept for three days, so you can look at what it did.
+
+## Settings
+
+The optional `factory` object in `~/.config/marshal-factory/config.json` overrides these defaults (from `lib/config.ts`):
+
+- `teamKey` (`FAC`) and `label` (`factory`): the Linear team and label to work on.
+- `maxInFlight` (2): how many jobs this Mac runs at once.
+- `budgetUsd` (5): what one attempt may spend, main session plus subagents.
+- `provider` (`claudeAgent`) and `model` (`claude-opus-5-5`): what new threads run on.
+- `stuckAfterMinutes` (30) and `failAfterNudgeMinutes` (30): when a quiet job gets nudged, and when it fails after the nudge.
+- `cleanupGraceDays` (3): how long a failed job's worktree is kept.
+
+[docs/operations.md](docs/operations.md) lists the rest.
+
+If you change the team key or label, also change them in the ingest Function (`FACTORY_TEAM_KEY` and `FACTORY_LABEL`, with the `neon functions deploy` command from step 6) and in Vercel. Then rerun `bun scripts/install-webhooks.ts` for a new team.
+
+## Updating
+
+Pull the latest version into the live checkout with the runner paused, so it never runs half-updated code:
+
+```sh
+bun scripts/install-runner.ts --uninstall
+git pull --ff-only && bun install
+bun scripts/install-runner.ts
+```
+
+When the panel is deployed from your repo, Vercel runs the new migrations itself when you merge to `main`. Update the live checkout after that deploy is ready. If you update without Vercel, run `bun run db:migrate` first.
+
+## Troubleshooting
+
+- **Start with the runner log**: `~/Library/Logs/marshal-factory/runner.log`. Each line is one JSON event. Errors name the step that failed.
+- **An issue isn't picked up.** Check that it is in your team (`teamKey`), has the label, and is in an unstarted state such as Todo. Also check that `factory.repos` isn't empty, and that the Linear webhook exists under Linear → Settings → API. The runner also polls every 90 seconds, so a missed webhook only delays the job.
+- **Machine shows offline.** The runner isn't sending heartbeats. Check `launchctl list | grep marshal-factory`, then the log. Run `bun runner/index.ts --once` in the live checkout to do one pass by hand and see its output.
+- **The board has no live updates.** Check the three Realtime variables in Vercel. Previews never subscribe to live updates; only production does.
+- **A run has no stages or costs.** The target repo's hooks aren't reaching ingest. Check that the files from `install-target` are on the repo's `main`, and that `secret` in your config equals `FACTORY_INGEST_SECRET` in the Function.
+- **You moved the live checkout.** The hooks and the LaunchAgent hold its old path. Run `install-target` for each repo and `install-runner` again.
+
+## Developing
+
+Work in a separate clone or worktree, never in the live checkout. Run `bun dev` for the panel against a Neon branch of your own, not `main`.
+
+`bun run test:regressions` runs every `scripts/*-regressions.ts` against a throwaway Neon branch made from production. It deletes the branch when the run ends. Pass a prefix to run a subset, for example `bun run test:regressions ingest`. During a test run, the real Linear client, the GitHub App and `t3` commands refuse to run, so a test can't touch real work.
+
+## Further reading
+
+- [docs/operations.md](docs/operations.md): how each part behaves, including the runner, write-back, retries, budgets, cleanup, the watchdog, sign-in and deploys.
+- [playbooks/factory.md](playbooks/factory.md): what each factory thread is told to do.
+- [docs/research/](docs/research/): background reports from the initial investigation.
