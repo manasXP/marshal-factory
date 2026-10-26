@@ -8,7 +8,7 @@ import { db } from "../db/client";
 import { machines } from "../db/schema";
 import { loadConfig } from "../lib/config";
 import { UNKNOWN, type Heartbeat, type Inventory } from "../lib/machine";
-import { connectStatus, readProjects, readT3Runtime } from "../lib/t3-state";
+import { connectStatus, readHarnesses, readProjects, readT3Runtime } from "../lib/t3-state";
 import { message, withTimeout } from "./queue";
 
 const run = promisify(execFile);
@@ -58,7 +58,7 @@ export function parseDf(output: string) {
 }
 
 export type HeartbeatCollectors = { [K in keyof Heartbeat]: () => Promise<Heartbeat[K]> };
-export type InventoryCollectors = { [K in keyof Inventory]: () => Promise<Inventory[K]> };
+export type InventoryCollectors = { [K in keyof Inventory]-?: () => Promise<Inventory[K]> };
 
 const settle = <T>(collect: () => Promise<T>) => collect().catch((): typeof UNKNOWN => UNKNOWN);
 
@@ -99,18 +99,20 @@ export function inventoryCollectors(): InventoryCollectors {
           origin: await text("git", ["-C", path, "remote", "get-url", "origin"]).then((url) => parseOrigin(url) ?? UNKNOWN, () => UNKNOWN),
         })),
       ),
+    harnesses: async () => readHarnesses(),
   };
 }
 
 export async function collectInventory(collectors: InventoryCollectors): Promise<Inventory> {
-  const [runnerSha, t3, connect, projects, repos] = await Promise.all([
+  const [runnerSha, t3, connect, projects, repos, harnesses] = await Promise.all([
     settle(collectors.runnerSha),
     settle(collectors.t3),
     settle(collectors.connect),
     collectors.projects().catch((): Inventory["projects"] => ({ source: UNKNOWN })),
     collectors.repos().catch((): Inventory["repos"] => []),
+    settle(collectors.harnesses),
   ]);
-  return { runnerSha, t3, connect, projects, repos };
+  return { runnerSha, t3, connect, projects, repos, harnesses };
 }
 
 export async function writeHeartbeat(machine: Machine, heartbeat: Heartbeat, now: Date) {

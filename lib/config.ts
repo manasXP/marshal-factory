@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./harness";
 import { inTestMode } from "./test-mode";
 
 export const CONFIG_PATH = process.env.MARSHAL_FACTORY_CONFIG ?? join(homedir(), ".config/marshal-factory/config.json");
@@ -31,9 +32,9 @@ export const factorySchema = z
     subagentIdleHours: z.number().nonnegative().default(6),
     /** Target repos the factory works in; the installer adds each one. */
     repos: z.array(z.string()).default([]),
-    /** The runner starts factory threads in the first repo with this provider and model. */
-    provider: z.string().default("claudeAgent"),
-    model: z.string().default("claude-opus-5-5"),
+    /** The provider and model for new factory threads when the panel's settings hold none. */
+    provider: z.string().default(DEFAULT_PROVIDER),
+    model: z.string().default(DEFAULT_MODEL),
     /** How often the runner's timer runs the watchdog, the cost-cap backstop and usage reconcile. */
     tickSeconds: z.number().positive().default(90),
     /** Overrides this Mac's IOPlatformUUID as its id in the machines table, so test runners keep their own row. */

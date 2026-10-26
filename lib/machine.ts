@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { harnessSchema, type Harness } from "./harness";
 
 export const UNKNOWN = "unknown";
 const known = <T extends z.ZodType>(shape: T) => z.union([shape, z.literal(UNKNOWN)]);
@@ -43,6 +44,8 @@ export const inventorySchema = z.object({
   connect: z.enum(CONNECT_STATES),
   projects: projectsSchema,
   repos: z.array(z.object({ path: z.string(), origin: known(z.string()) })),
+  /** Optional so an inventory stored before harnesses were reported still parses. */
+  harnesses: known(z.array(harnessSchema)).optional(),
 });
 export type Inventory = z.infer<typeof inventorySchema>;
 
@@ -66,6 +69,27 @@ export const parseInventory = (value: unknown): Inventory | null => {
 export const ONLINE_WINDOW_MS = 270_000;
 
 export const isOnline = (lastSeenAt: Date, now: number) => now - lastSeenAt.getTime() <= ONLINE_WINDOW_MS;
+
+/**
+ * Every harness the machines report, one per provider id. Each id takes its entry from an online
+ * machine over an offline one, and an enabled entry over a disabled one. Null when no machine has
+ * reported its harnesses yet.
+ */
+export function reportedHarnesses(machines: readonly { last_seen_at: Date; inventory: unknown }[], now: number): Harness[] | null {
+  const lists = machines.flatMap((m) => {
+    const harnesses = parseInventory(m.inventory)?.harnesses;
+    return Array.isArray(harnesses) ? [{ online: isOnline(m.last_seen_at, now), harnesses }] : [];
+  });
+  if (lists.length === 0) return null;
+  const best = new Map<string, { harness: Harness; rank: number }>();
+  for (const { online, harnesses } of lists) {
+    for (const harness of harnesses) {
+      const rank = (online ? 2 : 0) + (harness.enabled ? 1 : 0);
+      if ((best.get(harness.id)?.rank ?? -1) < rank) best.set(harness.id, { harness, rank });
+    }
+  }
+  return [...best.values()].map((b) => b.harness).sort((a, b) => a.name.localeCompare(b.name));
+}
 
 /**
  * The deep link that opens a thread in T3 on the Mac that runs it. T3's desktop app maps

@@ -186,6 +186,7 @@ try {
       connect: async () => inventoryA.connect,
       projects: async () => inventoryA.projects,
       repos: async () => inventoryA.repos,
+      harnesses: async () => inventoryA.harnesses,
     },
     inventoryMs: 600_000,
     timeoutMs: 200,
