@@ -5,6 +5,7 @@ import type { AgentRow, AuditRow, EventRow, JobRow, MachineRow, RunRow } from "@
 import { Board } from "./board";
 import { boardCards } from "./cards";
 import { attemptBranch } from "@/lib/factory";
+import { reportedHarnesses } from "@/lib/machine";
 import { groupBy, spendOf } from "./format";
 import { NewJobButton } from "./new-job-button";
 import { OtherActivity } from "./other-activity";
@@ -51,7 +52,11 @@ export function LivePanel({
     () => groupBy(agentRows, (a) => a.session_id),
     [agentRows],
   );
-  const cards = useMemo(() => boardCards(jobRows, runRows), [jobRows, runRows]);
+  const drivers = useMemo(
+    () => new Map((reportedHarnesses(machineRows, 0) ?? []).map((h) => [h.id, h.driver])),
+    [machineRows],
+  );
+  const cards = useMemo(() => boardCards(jobRows, runRows, drivers), [jobRows, runRows, drivers]);
   const unstaged = useMemo(() => {
     const claimed = new Set(jobRows.map((j) => j.key));
     return runRows.filter((r) => r.stage === null && !(r.job_key && claimed.has(r.job_key)));

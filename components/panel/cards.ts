@@ -32,7 +32,12 @@ export type BoardCard = {
 
 const stagedAt = (run: RunRow) => run.stage_at?.getTime() ?? 0;
 
-export function boardCards(jobs: readonly JobRow[], runs: readonly RunRow[]): BoardCard[] {
+/** `drivers` maps provider instance ids to their driver, so a renamed Claude Code instance stays tracked. */
+export function boardCards(
+  jobs: readonly JobRow[],
+  runs: readonly RunRow[],
+  drivers: ReadonlyMap<string, string> = new Map(),
+): BoardCard[] {
   const byKey = groupBy(
     runs.filter((r) => r.job_key !== null),
     (r) => r.job_key!,
@@ -60,7 +65,10 @@ export function boardCards(jobs: readonly JobRow[], runs: readonly RunRow[]): Bo
       nudgedAt: job.nudged_stage === job.stage ? job.nudged_at : null,
       latest: attemptRuns.find((r) => r.session_id === job.session_id) ?? attemptRuns[0] ?? null,
       runs: jobRuns,
-      untracked: job.provider && !isTracked(job.provider) ? { provider: job.provider, model: job.model } : null,
+      untracked:
+        job.provider && !isTracked(drivers.get(job.provider) ?? job.provider)
+          ? { provider: job.provider, model: job.model }
+          : null,
     };
   });
 
