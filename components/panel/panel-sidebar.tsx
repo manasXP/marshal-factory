@@ -1,6 +1,6 @@
 "use client";
 
-import { ActivityIcon, LayoutDashboardIcon, ServerIcon } from "lucide-react";
+import { ActivityIcon, LayoutDashboardIcon, ServerIcon, SettingsIcon } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ComponentProps } from "react";
@@ -20,6 +20,7 @@ const NAV = [
   { title: "Board", href: "/", icon: LayoutDashboardIcon },
   { title: "Other activity", href: "/activity", icon: ActivityIcon },
   { title: "Machines", href: "/machines", icon: ServerIcon },
+  { title: "Settings", href: "/settings", icon: SettingsIcon },
 ] as const;
 
 export function PanelSidebar(props: ComponentProps<typeof Sidebar>) {

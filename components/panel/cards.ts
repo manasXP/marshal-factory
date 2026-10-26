@@ -1,6 +1,7 @@
 import type { JobRow, RunRow } from "@/db/schema";
 import type { Stage } from "@/lib/events";
 import { attemptBranch } from "@/lib/factory";
+import { isTracked } from "@/lib/harness";
 import { sourceLink } from "@/lib/sources/shapes";
 import { groupBy } from "./format";
 
@@ -25,6 +26,8 @@ export type BoardCard = {
   /** The run the card opens; null while a claimed job has no session yet. */
   latest: RunRow | null;
   runs: RunRow[];
+  /** Set when the job runs on a harness that reports no stages or cost, so the card says so. */
+  untracked: { provider: string; model: string | null } | null;
 };
 
 const stagedAt = (run: RunRow) => run.stage_at?.getTime() ?? 0;
@@ -57,6 +60,7 @@ export function boardCards(jobs: readonly JobRow[], runs: readonly RunRow[]): Bo
       nudgedAt: job.nudged_stage === job.stage ? job.nudged_at : null,
       latest: attemptRuns.find((r) => r.session_id === job.session_id) ?? attemptRuns[0] ?? null,
       runs: jobRuns,
+      untracked: job.provider && !isTracked(job.provider) ? { provider: job.provider, model: job.model } : null,
     };
   });
 
@@ -86,6 +90,7 @@ export function boardCards(jobs: readonly JobRow[], runs: readonly RunRow[]): Bo
         nudgedAt: null,
         latest,
         runs: sorted,
+        untracked: null,
       };
     },
   );

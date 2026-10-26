@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/spinner";
 import type { AgentRow, RunRow } from "@/db/schema";
+import { harnessLabel } from "@/lib/harness";
 import { cn } from "@/lib/utils";
 import type { BoardCard } from "./cards";
 import { formatUsd, runCost, runTitle, shortId } from "./format";
@@ -108,6 +109,12 @@ export function StageCard({
         <p className="line-clamp-2 text-xs text-warning">{card.question}</p>
       ) : (
         card.summary && <p className="line-clamp-2 text-xs text-muted-foreground">{card.summary}</p>
+      )}
+      {card.untracked && (
+        <p className="text-xs text-muted-foreground" title="This harness reports no stages, agents or cost; check the run in T3.">
+          {harnessLabel(card.untracked.provider)}
+          {card.untracked.model && <span className="font-mono"> · {card.untracked.model}</span>} · not tracked
+        </p>
       )}
       <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
         {latest && <ModelChip model={latest.model} />}
