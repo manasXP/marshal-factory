@@ -1,0 +1,21 @@
+{
+  "fetchedAt": "2026-10-01T00:00:00Z",
+  "manifest": {
+    "currentModels": {
+      "claudeAgent": ["model-a", "model-b"],
+      "codex": ["codex-one", "codex-unnamed"],
+      "antigravity": ["grav-1"]
+    },
+    "providers": {
+      "claudeAgent": {
+        "models": [
+          { "slug": "model-a", "name": "Model A", "status": "current", "aliases": [] },
+          { "slug": "model-b", "name": "Model B", "status": "current" },
+          { "slug": "model-old", "name": "Model Old", "status": "deprecated" }
+        ]
+      },
+      "codex": { "models": [{ "slug": "codex-one", "name": "Codex One", "status": "current" }] },
+      "antigravity": { "models": { "grav-1": { "slug": "grav-1", "name": "Gravity One" } } }
+    }
+  }
+}

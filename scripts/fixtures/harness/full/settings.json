@@ -1,0 +1,11 @@
+{
+  "theme": "dark",
+  "providerInstances": {
+    "cursor": { "driver": "cursor", "enabled": false, "accentColor": "#000000", "config": {} },
+    "claudeAgent": { "driver": "claudeAgent", "enabled": true, "accentColor": "#111111", "config": {} },
+    "codex": { "driver": "codex", "enabled": true, "accentColor": "#222222", "config": {} },
+    "work-claude": { "driver": "claudeAgent", "enabled": true, "displayName": "Claude (work)" },
+    "antigravity": { "driver": "antigravity", "enabled": true, "displayName": "Gravity", "accentColor": "#333333" },
+    "mystery": { "driver": "mystery-cli", "enabled": true }
+  }
+}

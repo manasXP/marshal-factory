@@ -6,7 +6,8 @@ import { forbidInTest } from "../lib/test-mode";
 import { PENDING } from "./binding";
 import { thisMachine } from "./heartbeat";
 import type { JobSource } from "../lib/sources/types";
-import { bindThread, claimLaunch, config, factoryCheckouts, machineInFlight, pendingLaunches, releaseLaunch, toLaunch, withLocalImages } from "./ops";
+import type { HarnessChoice } from "../lib/settings";
+import { bindThread, claimLaunch, config, effectiveHarness, factoryCheckouts, machineInFlight, pendingLaunches, releaseLaunch, toLaunch, withLocalImages } from "./ops";
 
 const run = promisify(execFile);
 const T3 = process.env.T3CODE_CLI_PATH ?? "t3";
@@ -24,7 +25,7 @@ export function parseThreadId(stdout: string) {
   }
 }
 
-async function startThread(repo: string, branch: string, title: string, message: string) {
+async function startThread(repo: string, branch: string, title: string, message: string, { provider, model }: HarnessChoice) {
   forbidInTest("t3 thread start");
   const stdout = await runWithInput(
     T3,
@@ -33,8 +34,8 @@ async function startThread(repo: string, branch: string, title: string, message:
       "--worktree", "origin/main",
       "--branch", branch,
       "--title", title,
-      "--provider", config.factory.provider,
-      "--model", config.factory.model,
+      "--provider", provider,
+      "--model", model,
       "--json",
     ],
     message,
@@ -165,11 +166,12 @@ export async function launchQueued(onWorktree: (check: Record<string, unknown>) 
     origins.set(repo, await sh("git", ["rev-parse", "origin/main"], checkout));
   }
   const slot = { id: machine.id, repos: [...checkouts.keys()], maxInFlight: config.factory.maxInFlight };
+  const harness = await effectiveHarness();
   const launched = await launchEntries(pending, {
-    claim: (key, marker) => claimLaunch(key, marker, slot),
+    claim: (key, marker) => claimLaunch(key, marker, slot, harness),
     // After the claim, so a job another machine wins downloads nothing here.
     start: async (entry) =>
-      startThread(checkouts.get(entry.repo)!, entry.branch, entry.threadTitle, await withLocalImages(entry.source, entry.key, entry.message)),
+      startThread(checkouts.get(entry.repo)!, entry.branch, entry.threadTitle, await withLocalImages(entry.source, entry.key, entry.message), harness),
     bind: bindThread,
     release: releaseLaunch,
     now: Date.now,

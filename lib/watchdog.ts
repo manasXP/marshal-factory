@@ -9,6 +9,8 @@ export type WatchInput = {
   nudgedAt: Date | null;
   nudgedStage: Stage | null;
   thread: ThreadState;
+  /** False for a harness that reports no stages, so quiet says nothing about whether it is stuck. */
+  tracked: boolean;
   now: Date;
 };
 
@@ -23,7 +25,8 @@ const minutes = (ms: number) => ms / 60_000;
 /**
  * Decides what a working job needs. A run is stuck when it has been quiet past the threshold,
  * or its thread stopped and stayed quiet past a short grace. The first time it gets a nudge; if
- * it is still stuck in the same stage after the second threshold, it fails.
+ * it is still stuck in the same stage after the second threshold, it fails. An untracked run is
+ * only failed when its thread is gone.
  */
 export function watch(input: WatchInput, limits: FactoryLimits): WatchAction {
   const idle = minutes(input.now.getTime() - input.lastEventAt.getTime());
@@ -32,6 +35,7 @@ export function watch(input: WatchInput, limits: FactoryLimits): WatchAction {
   if (input.thread === "gone") {
     return { kind: "fail", reason: `its T3 thread is gone (stage ${input.stage})` };
   }
+  if (!input.tracked) return input.nudgedAt ? { kind: "reset" } : { kind: "ok" };
   const stuck =
     idle >= limits.stuckAfterMinutes ||
     (input.thread === "stopped" && idle >= limits.stoppedGraceMinutes);

@@ -127,6 +127,13 @@
       "when": 1792959898653,
       "tag": "0017_stop_event",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1793026348499,
+      "tag": "0018_settings",
+      "breakpoints": true
     }
   ]
 }

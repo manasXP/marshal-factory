@@ -19,6 +19,8 @@ import { github } from "../lib/github/pulls";
 import { claimConflict, conflictMessage, unclaimedRunsWithPr } from "../lib/conflicts";
 import { attemptBranch } from "../lib/factory";
 import { nudgeMessage, watch, type ThreadState } from "../lib/watchdog";
+import { isTracked } from "../lib/harness";
+import { readSettings, resolveHarness, type HarnessChoice } from "../lib/settings";
 import { forbidInTest } from "../lib/test-mode";
 import { runWithInput } from "../lib/exec";
 import { bindingOf, canReclaimSql, isStopped, PENDING, stopDeliverableSql } from "./binding";
@@ -280,6 +282,7 @@ export async function watchdog() {
         nudgedAt: job.nudged_at,
         nudgedStage: job.nudged_stage,
         thread: await threads.state(job.t3_thread_id),
+        tracked: isTracked(job.provider ?? config.factory.provider),
         now,
       },
       config.factory,
@@ -527,6 +530,8 @@ export async function claim({
             synced_event_id: null,
             t3_thread_id: null,
             machine_id: null,
+            provider: null,
+            model: null,
             session_id: null,
             nudged_at: null,
             nudged_stage: null,
@@ -746,18 +751,24 @@ async function finishStop(job: Job, reopen: boolean) {
 
 export type LaunchSlot = { id: string; repos: readonly string[]; maxInFlight: number };
 
+/** The harness new threads start on: the panel's saved settings, else this runner's config. */
+export async function effectiveHarness() {
+  return resolveHarness(await readSettings(db), config.factory);
+}
+
 /**
  * Marks a queued job as being launched by this machine, as one compare-and-set: false when another
  * launch or machine holds the job, the machine has no checkout of its repo, or the machine is full.
  * The capacity count is read in the same statement, which holds because one machine runs one
- * runner and its launches run one at a time.
+ * runner and its launches run one at a time. The harness is recorded with the marker, so a launch
+ * that launch recovery binds later still says what it ran on.
  */
-export async function claimLaunch(key: string, marker: string, machine: LaunchSlot) {
+export async function claimLaunch(key: string, marker: string, machine: LaunchSlot, harness?: HarnessChoice) {
   if (machine.repos.length === 0) return false;
   const working = sql.join(IN_FLIGHT.map((stage) => sql`${stage}`), sql`, `);
   const claimed = await db
     .update(jobs)
-    .set({ t3_thread_id: marker, machine_id: machine.id })
+    .set({ t3_thread_id: marker, machine_id: machine.id, ...(harness && { provider: harness.provider, model: harness.model }) })
     .where(
       and(
         eq(jobs.key, key),
@@ -773,7 +784,10 @@ export async function claimLaunch(key: string, marker: string, machine: LaunchSl
 }
 
 export async function releaseLaunch(key: string, marker: string) {
-  await db.update(jobs).set({ t3_thread_id: null, machine_id: null }).where(and(eq(jobs.key, key), eq(jobs.t3_thread_id, marker)));
+  await db
+    .update(jobs)
+    .set({ t3_thread_id: null, machine_id: null, provider: null, model: null })
+    .where(and(eq(jobs.key, key), eq(jobs.t3_thread_id, marker)));
 }
 
 export async function machineInFlight(machineId: string) {

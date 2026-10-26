@@ -143,6 +143,9 @@ export const jobs = pgTable(
     conflict_head: text("conflict_head"),
     t3_thread_id: text("t3_thread_id"),
     machine_id: text("machine_id"),
+    /** The T3 provider instance and model this attempt's thread was launched with; null before a launch. */
+    provider: text("provider"),
+    model: text("model"),
     session_id: text("session_id"),
     claimed_at: ts("claimed_at").notNull(),
     updated_at: ts("updated_at").notNull(),
@@ -211,6 +214,17 @@ export const machines = pgTable("machines", {
   inventory_at: ts("inventory_at"),
 });
 
+/** Factory-wide settings the panel edits; the one row has id "factory". */
+export const settings = pgTable("settings", {
+  id: text("id").primaryKey(),
+  /** The T3 provider instance new threads start on. */
+  provider: text("provider").notNull(),
+  model: text("model").notNull(),
+  updated_at: ts("updated_at").notNull(),
+  /** The owner's email. */
+  updated_by: text("updated_by").notNull(),
+});
+
 export const auditAction = pgEnum("audit_action", ["merge_requested", "merge_succeeded", "merge_failed"]);
 export const auditResult = pgEnum("audit_result", ["ok", "head_moved", "not_mergeable", "refused", "error"]);
 
@@ -242,4 +256,5 @@ export type JobRow = typeof jobs.$inferSelect;
 export type IntentRow = typeof intents.$inferSelect;
 export type IntentKind = IntentRow["kind"];
 export type MachineRow = typeof machines.$inferSelect;
+export type SettingsRow = typeof settings.$inferSelect;
 export type AuditRow = typeof auditLog.$inferSelect;

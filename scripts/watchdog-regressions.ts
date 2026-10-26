@@ -12,6 +12,7 @@ const base: WatchInput = {
   nudgedAt: null,
   nudgedStage: null,
   thread: "running",
+  tracked: true,
   now,
 };
 
@@ -35,5 +36,15 @@ assert.deepEqual(
   "moving to another stage clears the nudge",
 );
 assert.equal(watch({ ...base, thread: "gone" }, limits).kind, "fail", "a vanished thread fails at once");
+
+const untracked = { ...base, tracked: false };
+assert.deepEqual(watch({ ...untracked, lastEventAt: ago(240) }, limits), { kind: "ok" }, "an untracked run reports nothing, so quiet is not stuck");
+assert.deepEqual(watch({ ...untracked, thread: "stopped", lastEventAt: ago(240) }, limits), { kind: "ok" }, "nor is a stopped thread");
+assert.deepEqual(
+  watch({ ...untracked, nudgedAt: ago(90), nudgedStage: "implementing", lastEventAt: ago(240) }, limits),
+  { kind: "reset" },
+  "a nudge left from before is cleared instead of failing the run",
+);
+assert.equal(watch({ ...untracked, thread: "gone" }, limits).kind, "fail", "an untracked run whose thread is gone still fails");
 
 console.log("watchdog regressions passed");
