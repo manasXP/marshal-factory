@@ -244,16 +244,19 @@ Within seconds the issue moves to In Progress, a comment says the factory took i
 
 **Stop a job.** Remove the `factory` label, or cancel the issue. The runner stops the thread.
 
-**When it fails.** A job fails when the agent gives up, or when it stays stuck after one nudge. The reason is posted on the issue, the issue goes back to Todo, and the label changes to `factory-failed`. To retry, press **Retry** on the job's item in the panel's Needs you inbox or in its Slack message, with an optional note for the next attempt, or add `factory` to the issue again. The retry runs on a new branch (`factory/FAC-7-a2`). A failed job's worktree is kept for three days, so you can look at what it did. Spend is measured per attempt and shown on the card; no amount stops a run.
+**When it fails.** A job fails when the agent gives up, or when it stays stuck after one nudge. The reason is posted on the issue, the issue goes back to Todo, and the label changes to `factory-failed`. To retry, press **Retry** on the job's item in the panel's Needs you inbox or in its Slack message, with an optional note for the next attempt, or add `factory` to the issue again. The retry runs on a new branch (`factory/FAC-7-a2`). A failed job's worktree is kept for three days, so you can look at what it did. Spend is measured per attempt and shown on the card.
+
+**Spend limit.** Each attempt may spend up to **Spend limit per attempt** in Settings ($10 by default). When it gets there, the factory pauses the job and asks on the issue, in the Inbox and in Slack for a higher limit. Reply with an amount, such as `$25`, to let it carry on where it stopped; a reply without one raises the limit by the Settings amount. Remove the `factory` label to stop it instead.
 
 ## Settings
 
-The panel's **Settings** page holds what you change day to day: the default harness and model for new jobs, where jobs run (**Run jobs on**: this Mac or Modal, with what's still missing for Modal), and Slack notifications. Per repo, **Repositories** sets merging (**Off**, **Trial** or **Merge when confident**) and **Require Bugbot review**. A ticket's **Harness**, **Runs on** and **Repository** labels beat the repo's defaults, which beat Settings.
+The panel's **Settings** page holds what you change day to day: the default harness and model for new jobs, where jobs run (**Run jobs on**: this Mac or Modal, with what's still missing for Modal), the **Spend limit per attempt**, and Slack notifications. Per repo, **Repositories** sets merging (**Off**, **Trial** or **Merge when confident**) and **Require Bugbot review**. A ticket's **Harness**, **Runs on** and **Repository** labels beat the repo's defaults, which beat Settings.
 
 The optional `factory` object in `~/.config/marshal-factory/config.json` overrides these defaults (from `lib/config.ts`):
 
 - `teamKey` (`FAC`) and `label` (`factory`): the Linear team and label to work on.
 - `maxInFlight` (4): how many jobs this Mac runs at once.
+- `spendLimitUsd` (10): each attempt's spend limit when Settings has none saved.
 - `provider` (`claudeAgent`) and `model` (`claude-opus-5-5`): what new threads run on.
 - `stuckAfterMinutes` (30) and `failAfterNudgeMinutes` (30): when a quiet job gets nudged, and when it fails after the nudge.
 - `cleanupGraceDays` (3): how long a failed job's worktree is kept.

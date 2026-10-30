@@ -213,6 +213,8 @@ async function tick() {
     pullRequests: await isolated(ops.checkPullRequests),
     // Before the merge decisions, so a run that just opened its PR is decided on its latest cost.
     reconciled: await isolated(ops.reconcileUsage),
+    // After the usage reconcile, so the spend it compares with each limit is this tick's.
+    spendLimits: await isolated(() => ops.enforceSpendLimits()),
     // After the PR check, so a merged or conflicting PR has already left pr.
     mergeDecisions: await isolated(() => decideMerges()),
     mainWatched: await isolated(() => watchMerges()),

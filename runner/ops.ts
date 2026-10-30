@@ -24,7 +24,7 @@ import { readRegistry, registerRepos, routeRepo, type Registry } from "../lib/re
 import { ensureAwake, HostGoneError, hosts, isHibernated, WakeDeferredError, type JobHost } from "../lib/host";
 import { modalHost } from "../lib/modal-host";
 import { requestedStop } from "../lib/stop";
-import { canReclaimSql, heldStoppingSql, isStopped, PENDING, stopDeliverableSql, stoppingSql } from "./binding";
+import { bindingOf, canReclaimSql, heldStoppingSql, isStopped, PENDING, stopDeliverableSql, stoppingSql } from "./binding";
 import { config } from "./config";
 import { thisMachine } from "./heartbeat";
 import { leaseSlot, teardownSandbox } from "./lifecycle";
@@ -33,8 +33,10 @@ import { postEvent } from "./ingest-client";
 import { recordCodexUsage } from "./codex-usage";
 
 export { ingestClient, postEvent } from "./ingest-client";
-import { threads } from "./threads";
+import { ACTIVE_RUN_STATUSES, threads } from "./threads";
 import { claimReplies, qaBlock, resumeMessage } from "../lib/resume";
+import { branchSpend } from "../lib/spend";
+import { isSpendPause, money, pauseQuestion, raisedLimit, spendResumeMessage } from "../lib/spend-limit";
 
 // The factory's deterministic work. The runner calls these from webhook intents, its timer and
 // its startup reconcile; every one of them is idempotent, so calling one twice changes nothing.
@@ -205,23 +207,31 @@ export async function resumeAnswered() {
     // A dead thread is unlinked in the same update that claims the replies, so the relaunch
     // cannot be lost to a later failure in this pass.
     const relaunch = alive ? undefined : qaBlock(plan.question, plan.answer);
+    // A spend pause resumes under the limit the answer sets; the thread carries on instead of starting over.
+    const raise = isSpendPause(job) ? await raisedSpendLimit(job, plan.answer) : undefined;
     if (!(await claimReplies(db, job.id, replyIds, plan.answer, now, relaunch))) continue;
+    if (raise) await db.update(jobs).set({ budget_usd: raise.limit }).where(eq(jobs.id, job.id));
 
     if (alive) {
+      const message = raise
+        ? spendResumeMessage(source.describe(job), raise.spent, raise.limit, factoryPlaybook(jobExecution(job)))
+        : resumeMessage(source.describe(job), plan.question, plan.answer, factoryPlaybook(jobExecution(job)));
       try {
-        await threads.send(job.t3_thread_id!, await withLocalImages(job.source, job.key, resumeMessage(source.describe(job), plan.question, plan.answer, factoryPlaybook(jobExecution(job)))), host);
+        await threads.send(job.t3_thread_id!, await withLocalImages(job.source, job.key, message), host);
       } catch (error) {
         await db
           .update(jobs)
-          .set({ delivered_reply_ids: job.delivered_reply_ids, answered_at: job.answered_at, answer: job.answer })
+          .set({ delivered_reply_ids: job.delivered_reply_ids, answered_at: job.answered_at, answer: job.answer, budget_usd: job.budget_usd })
           .where(eq(jobs.id, job.id));
         throw error;
       }
     }
 
-    const summary = alive
-      ? "Answer received; the thread resumes from triage."
-      : "Answer received; a fresh thread will pick it up.";
+    const summary = raise
+      ? `Spend limit raised to ${money(raise.limit)}; ${alive ? "the thread continues where it stopped." : "a fresh thread will pick it up."}`
+      : alive
+        ? "Answer received; the thread resumes from triage."
+        : "Answer received; a fresh thread will pick it up.";
     await postEvent({
       eventId: runnerEventId("resume", job.external_id, replyIds.join(",")),
       sessionId: job.session_id ?? runnerEventId("resume", job.external_id),
@@ -236,6 +246,84 @@ export async function resumeAnswered() {
     resumed.push(`${job.key}:${alive ? "sent" : "relaunch"}`);
   }
   return resumed;
+}
+
+/** The limit a new attempt gets, and how far an answer without an amount raises a paused one. */
+async function currentSpendLimit() {
+  return (await readSettings(db))?.spend_limit_usd ?? config.factory.spendLimitUsd;
+}
+
+async function attemptSpend(job: Pick<Job, "key" | "attempt">) {
+  const branch = attemptBranch(job.key, job.attempt);
+  return (await branchSpend(db, [branch], config.factory.pricing))[branch] ?? 0;
+}
+
+async function raisedSpendLimit(job: Job, answer: string) {
+  const spent = await attemptSpend(job);
+  return { spent, limit: raisedLimit(answer, spent, job.budget_usd, await currentSpendLimit()) };
+}
+
+/**
+ * Asks T3 to interrupt the job's thread and its running subagent threads. A request id per pause
+ * and run makes a repeat on a later tick a no-op for T3. Best effort: what it could not reach is
+ * returned for the log, and the next tick asks again while the job stays paused.
+ */
+async function interruptForSpend(job: Job, pauseEventId: string) {
+  const threadId = job.t3_thread_id;
+  if (!threadId || bindingOf(threadId) === "pending" || isHibernated(job)) return "nothing to interrupt";
+  try {
+    const host = hosts.forJob(job);
+    const parent = await threads.activity(threadId, host);
+    if (parent.state === "gone") return "thread gone";
+    const subagents = parent.projectId ? await threads.subagents(threadId, parent.projectId, host) : [];
+    const targets = [
+      ...(parent.state === "running" ? [{ threadId, runId: parent.activeRunId }] : []),
+      ...subagents.filter((s) => ACTIVE_RUN_STATUSES.includes(s.status)).map((s) => ({ threadId: s.threadId, runId: s.latestRunId })),
+    ];
+    for (const target of targets) {
+      await threads.interrupt(target.threadId, `marshal-factory:spend:${job.id}:${pauseEventId}:${target.threadId}:${target.runId ?? "latest"}`, `marshal-factory paused ${job.key} at its spend limit`, host);
+    }
+    return targets.length > 0 ? `interrupted ${targets.length}` : "idle";
+  } catch (error) {
+    return `could not interrupt: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`;
+  }
+}
+
+/**
+ * Pauses every working attempt of this machine whose spend reached its limit: the job waits with
+ * a question asking for a new limit, and its thread is interrupted. A paused job whose thread still
+ * runs is interrupted again. Spend is read after reconcileUsage, so it is at most a tick old.
+ */
+export async function enforceSpendLimits() {
+  const rows = parseJobs(await db.select().from(jobs).where(and(await mine(), inArray(jobs.stage, [...IN_FLIGHT, "waiting"]))));
+  const working = rows.filter((j) => j.stage !== "waiting" || isSpendPause(j));
+  if (working.length === 0) return [];
+  const spend = await branchSpend(db, working.map((j) => attemptBranch(j.key, j.attempt)), config.factory.pricing);
+  const increment = await currentSpendLimit();
+  const paused: string[] = [];
+  for (const job of working) {
+    if (isSpendPause(job)) {
+      const outcome = await interruptForSpend(job, job.stage_event_id!);
+      if (outcome.startsWith("interrupted") || outcome.startsWith("could not")) paused.push(`${job.key}:${outcome}`);
+      continue;
+    }
+    const spent = spend[attemptBranch(job.key, job.attempt)] ?? 0;
+    if (spent < job.budget_usd) continue;
+    // Keyed on the stage it pauses, so a resumed attempt that reaches a raised limit pauses again.
+    const eventId = runnerEventId("budget", job.external_id, job.attempt, job.stage_event_id ?? job.stage);
+    await postEvent({
+      eventId,
+      sessionId: job.session_id ?? runnerEventId("budget", job.external_id),
+      at: Date.now(),
+      kind: "stage",
+      stage: "waiting",
+      summary: `Paused at the spend limit: ${money(spent)} of ${money(job.budget_usd)}.`,
+      question: pauseQuestion(spent, job.budget_usd, increment),
+      jobKey: job.key,
+    });
+    paused.push(`${job.key}:${await interruptForSpend(job, eventId)}`);
+  }
+  return paused;
 }
 
 /** Nudges stuck runs once, then fails them; see lib/watchdog.ts for when a run counts as stuck. */
@@ -526,6 +614,8 @@ async function claimDrafts(ready: readonly { source: SourceAdapter<JobSource>; d
   if (targets.length === 0) throw new Error("no repository is registered and factory.repos is empty, so there is no repository to claim work for");
   const targetOf = (source: SourceAdapter<JobSource>, draft: JobDraft) => routeRepo(source.overrides(draft.sourceState), known).repo ?? checkouts[0] ?? targets[0]!;
   const me = await mine();
+  // Every attempt claimed now, first or retried, gets the limit Settings name now.
+  const spendLimit = await currentSpendLimit();
   return db.transaction(async (tx) => {
     // The lock's name predates other sources; runners on older code take the same one.
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext('marshal-factory linear-poll'))`);
@@ -557,8 +647,7 @@ async function claimDrafts(ready: readonly { source: SourceAdapter<JobSource>; d
           repo: target,
           writeback: draft.writeback,
           source_state: draft.sourceState,
-          // Unused, but NOT NULL without a default until migration 0034 has run.
-          budget_usd: 5,
+          budget_usd: spendLimit,
           claimed_at: now,
           updated_at: now,
         })
@@ -599,6 +688,7 @@ async function claimDrafts(ready: readonly { source: SourceAdapter<JobSource>; d
             repo: target,
             writeback: draft.writeback,
             source_state: sql`${jobs.source_state} || excluded.source_state`,
+            budget_usd: spendLimit,
             claimed_at: now,
             updated_at: now,
           },

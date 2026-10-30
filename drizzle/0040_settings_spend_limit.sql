@@ -1,0 +1,1 @@
+ALTER TABLE "settings" ADD COLUMN "spend_limit_usd" double precision DEFAULT 10 NOT NULL;

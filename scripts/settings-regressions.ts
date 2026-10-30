@@ -176,11 +176,11 @@ assert.deepEqual(await saveSettings(deps(owner), { provider: "codex", model: "co
 assert.deepEqual(
   choices,
   [
-    { provider: "codex", model: "codex-one", execution: "local", by: OWNER },
-    { provider: "anything", model: "goes", execution: "local", by: OWNER },
-    { provider: "codex", model: "codex-one", execution: "modal", by: OWNER },
+    { provider: "codex", model: "codex-one", execution: "local", spendLimitUsd: 10, by: OWNER },
+    { provider: "anything", model: "goes", execution: "local", spendLimitUsd: 10, by: OWNER },
+    { provider: "codex", model: "codex-one", execution: "modal", spendLimitUsd: 10, by: OWNER },
   ],
-  "trimmed, local unless chosen, and recorded under the owner's email",
+  "trimmed, local unless chosen, the $10 spend limit unless set, and recorded under the owner's email",
 );
 const failing = await saveSettings({ ...deps(owner), save: async () => Promise.reject(new Error("db down")) }, { provider: "codex", model: "codex-one" });
 assert.equal(!failing.ok && failing.status, 502, "a failed write is reported");
@@ -203,7 +203,7 @@ try {
   assert.equal(rows.length, 1, "saving again updates the one row");
   assert.deepEqual(
     { ...rows[0]!, updated_at: rows[0]!.updated_at.toISOString() },
-    { id: SETTINGS_ID, provider: "antigravity", model: "grav-1", execution: "local", updated_by: "second@example.com", updated_at: "2026-10-26T11:00:00.000Z" },
+    { id: SETTINGS_ID, provider: "antigravity", model: "grav-1", execution: "local", spend_limit_usd: 10, updated_by: "second@example.com", updated_at: "2026-10-26T11:00:00.000Z" },
   );
   assert.deepEqual(await effectiveHarness(), { provider: "antigravity", model: "grav-1", from: "settings" }, "a saved choice wins over the config");
 

@@ -328,6 +328,7 @@ export function LivePanel({
                           agentsBySession,
                         ),
                         attempt: selectedJob.attempt,
+                        limit: selectedJob.budget_usd,
                       }
                     : undefined
                 }
