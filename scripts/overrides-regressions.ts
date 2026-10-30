@@ -1,6 +1,7 @@
 import "./test-guard";
 import assert from "node:assert/strict";
 import { eq, inArray } from "drizzle-orm";
+import type { Job } from "../lib/sources/types";
 
 const { db } = await import("../db/client");
 const { auditLog, jobs } = await import("../db/schema");
@@ -323,7 +324,7 @@ try {
   await announceFallbacks(await row(), { notes: ["something else"] });
   assert.equal(comments.size, 1, "one comment however often the launch runs");
   assert.equal([...comments.values()][0], fallbackComment(ticket.notes));
-  assert.equal((await row()).source_state.factoryCommentIds.length, 1, "recorded as the factory's own, so it is never read as a reply");
+  assert.equal(((await row()) as Job<"linear">).source_state.factoryCommentIds.length, 1, "recorded as the factory's own, so it is never read as a reply");
   const audits = await db.select().from(auditLog).where(eq(auditLog.job_id, jid));
   assert.deepEqual(audits.map((a) => [a.action, a.detail, a.target]), [["override_fallback", ticket.notes[0], "https://linear.app/x/issue/OVR"]], "and one audit row");
   await announceFallbacks(await row(), { provider: "codex", notes: [] });

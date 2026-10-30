@@ -1,6 +1,7 @@
 import "./test-guard";
 import assert from "node:assert/strict";
 import { asc } from "drizzle-orm";
+import type { Job } from "../lib/sources/types";
 
 const { db } = await import("../db/client");
 const { jobs } = await import("../db/schema");
@@ -334,7 +335,7 @@ const EXPECTED = {
 };
 
 const snapshot = async () =>
-  parseJobs(await db.select().from(jobs).orderBy(asc(jobs.key))).map((j) => ({
+  parseJobs(await db.select().from(jobs).orderBy(asc(jobs.key))).map((j) => j as Job<"linear">).map((j) => ({
     key: j.key,
     stage: j.stage,
     attempt: j.attempt,

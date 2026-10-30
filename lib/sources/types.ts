@@ -90,6 +90,8 @@ export interface SourceAdapter<S extends JobSource> {
   syncLabelGroups?(groups: readonly LabelGroupSpec[]): Promise<{ team: string; created: string[]; problems: string[] }>;
   /** syncLabelGroups for the panel, which reads the source's credentials from its env instead of the runner's config. */
   panelSyncLabelGroups?(groups: readonly LabelGroupSpec[]): Promise<{ team: string; created: string[]; problems: string[] }>;
+  /** What a GitHub App delivery means for this source's jobs; ingest asks every source that has one. */
+  appEvent?(event: string, body: unknown, env: Readonly<Record<string, string | undefined>>): IntentDraft | null;
   /** Stores an image where the source keeps uploads, for a job about to be filed; returns its markdown. */
   uploadImage?(image: ImageFile): Promise<string>;
 }

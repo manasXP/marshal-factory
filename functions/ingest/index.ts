@@ -6,7 +6,7 @@ import { Pool } from "pg";
 import * as schema from "../../db/schema";
 import { ingestBodySchema } from "../../lib/events";
 import { ingest } from "../../lib/ingest";
-import { isJobSource, sourceFor } from "../../lib/sources";
+import { allSources, isJobSource, sourceFor } from "../../lib/sources";
 import type { JobSource } from "../../lib/sources/types";
 import { githubIntent, githubPushIntent, verifyGithub, type IntentDraft } from "../../lib/webhooks";
 
@@ -72,7 +72,8 @@ async function githubWebhook(request: Request) {
   const event = request.headers.get("x-github-event") ?? "?";
   if (!deliveryId) return Response.json({ error: "missing X-GitHub-Delivery" }, { status: 400 });
   const body = JSON.parse(raw) as unknown;
-  return Response.json(await record("github", deliveryId, event, body, [githubIntent(event, body), githubPushIntent(event, body)]));
+  const sourceIntents = allSources().map((source) => source.appEvent?.(event, body, process.env) ?? null);
+  return Response.json(await record("github", deliveryId, event, body, [githubIntent(event, body), githubPushIntent(event, body), ...sourceIntents]));
 }
 
 async function ingestEvents(request: Request) {

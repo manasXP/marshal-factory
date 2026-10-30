@@ -224,6 +224,7 @@ The Jobs page and the Inbox have a repository filter in the header. It is kept i
 **Start a job.** Either:
 
 - In Linear, add the `factory` label to an issue in Todo.
+- On GitHub, add the `factory` label to an open issue in a repo that is enabled on **Repositories**. The job runs in that repo, and the factory reports on the issue as it does on Linear ([GitHub Issues](docs/operations.md#github-issues)).
 - In the panel, click **New job**, then write a title, a description, and optionally paste or drop images. The panel files the issue in Linear for you.
 - In Slack, type `/factory <what to build>`, or pick **Send to factory** from a message's ⋯ menu. Both open the same form ([Connecting Slack](#connecting-slack)).
 

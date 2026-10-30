@@ -17,7 +17,19 @@ const linear = {
   }),
 };
 
-const SHIPPED = { linear } satisfies Record<string, SourceShape>;
+const github = {
+  label: "GitHub",
+  writeback: z.object({ kind: z.literal("github"), repo: z.custom<`${string}/${string}`>((v) => typeof v === "string" && /^[^/\s]+\/[^/\s]+$/.test(v)), number: z.number().int().positive() }),
+  sourceState: z.object({
+    /** owner/name of the repo the issue lives in; the job always runs there. */
+    repo: z.string(),
+    labels: z.array(z.string()),
+    /** The attempt the claim comment was posted for; a claim draft never carries it, so a reclaim announces again. */
+    announcedAttempt: z.number().int().default(0),
+  }),
+};
+
+const SHIPPED = { linear, github } satisfies Record<string, SourceShape>;
 
 /** The sources the factory ships. Regressions register a fake one beside them (registerSource in ./index). */
 export type JobSource = keyof typeof SHIPPED;
