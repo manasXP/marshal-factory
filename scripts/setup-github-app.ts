@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { basename, dirname, join } from "node:path";
@@ -13,6 +13,8 @@ const { values: args } = parseArgs({
     port: { type: "string", default: "3456" },
     "no-open": { type: "boolean", default: false },
     force: { type: "boolean", default: false },
+    name: { type: "string" },
+    url: { type: "string" },
   },
 });
 if (existsSync(".env.local")) process.loadEnvFile(".env.local");
@@ -20,12 +22,27 @@ const GITHUB = process.env.GITHUB_URL ?? "https://github.com";
 const ingestBase = process.env.NEON_FUNCTION_INGEST_BASE_URL?.replace(/\/$/, "");
 if (!ingestBase) throw new Error("NEON_FUNCTION_INGEST_BASE_URL is not set; it names the main ingest Function");
 
+/** owner/name of this checkout's origin, which names the App unless --name and --url do. */
+function originRepo() {
+  try {
+    const url = execFileSync("git", ["remote", "get-url", "origin"], { cwd: import.meta.dirname, encoding: "utf8" });
+    return /[:/]([^/:]+)\/([^/]+?)(?:\.git)?\/?$/.exec(url.trim())?.slice(1).join("/");
+  } catch {
+    return undefined;
+  }
+}
+const origin = args.name && args.url ? undefined : originRepo();
+if (!args.name && !origin) throw new Error("can't read this checkout's origin; pass --name for the GitHub App, such as marshal-factory-<you>");
+// GitHub App names are unique across GitHub, so the default carries the fork's owner.
+const appName = args.name ?? `marshal-factory-${origin!.split("/")[0]!.toLowerCase()}`;
+const appUrl = args.url ?? (origin ? `${GITHUB}/${origin}` : GITHUB);
+
 const base = `http://localhost:${args.port}`;
 let state: string | undefined = randomBytes(16).toString("hex");
 
 const manifest = {
-  name: "marshal-factory-ski043",
-  url: "https://github.com/ski043/marshal-factory",
+  name: appName,
+  url: appUrl,
   hook_attributes: { url: `${ingestBase}/webhooks/github`, active: true },
   redirect_url: `${base}/callback`,
   setup_url: `${base}/installed`,

@@ -50,10 +50,10 @@ bun install
 
 Fork the repo first if you want Vercel to deploy your copy. This checkout is the **live checkout**. The runner, and the hooks installed into your target repos, run code straight from this path. Keep it on `main` and don't move it. Do development work in a separate clone or worktree.
 
-### 2. Change the two values tied to the original setup
+### 2. Know the two values tied to your setup
 
-- `scripts/setup-github-app.ts`: change the manifest's `name` (`marshal-factory-ski043`) and `url`. GitHub App names are unique across GitHub, so you need your own, such as `marshal-factory-<you>`.
-- `lib/migrate-guard.ts`: `PRODUCTION_ENDPOINTS` names the production database endpoint, so a preview build can never migrate production. You fill it in at step 4.
+- The GitHub App's name. GitHub App names are unique across GitHub, so `scripts/setup-github-app.ts` names it after your fork's owner, `marshal-factory-<owner>`, with your fork as its URL. Pass `--name` (and `--url`) at step 6 to pick others.
+- The production database endpoint, `FACTORY_PRODUCTION_ENDPOINTS`, so a preview build can never migrate production. You note it at step 4 and give it to Vercel at step 8.
 
 ### 3. Prepare Linear
 
@@ -107,7 +107,11 @@ bun run db:migrate
 
 `.env.local` now also holds `DATABASE_URL`, `DATABASE_URL_UNPOOLED`, `NEON_AUTH_BASE_URL`, `NEON_REALTIME_URL`, `NEON_REALTIME_SECRET` and `NEON_FUNCTION_INGEST_BASE_URL`.
 
-Finally, put the production endpoint id into `PRODUCTION_ENDPOINTS` in `lib/migrate-guard.ts`. It is the `ep-…` part of the host in `DATABASE_URL`, without `-pooler`.
+Finally, note the production endpoint id for `FACTORY_PRODUCTION_ENDPOINTS`. It is the `ep-…` part of the host in `DATABASE_URL`, without `-pooler`:
+
+```sh
+grep '^DATABASE_URL=' .env.local | sed -E 's|.*@(ep-[^.]+)\..*|\1|; s|-pooler$||'
+```
 
 ### 5. Write the runner's config
 
@@ -132,7 +136,7 @@ The runner reads and merges PRs as a GitHub App, not as your `gh` login:
 bun scripts/setup-github-app.ts
 ```
 
-A browser page opens and sends the app manifest to GitHub. Click **Create GitHub App**, pick the repos the factory may work in, and click **Install**. The script saves the app's id, private key and webhook secret to `~/.config/marshal-factory/github-app.json` (mode 600). You can add repos to the installation later in GitHub's app settings.
+Pass `--name marshal-factory-<you>` if the default name, taken from your fork's owner, is taken or longer than GitHub allows. A browser page opens and sends the app manifest to GitHub. Click **Create GitHub App**, pick the repos the factory may work in, and click **Install**. The script saves the app's id, private key and webhook secret to `~/.config/marshal-factory/github-app.json` (mode 600). You can add repos to the installation later in GitHub's app settings.
 
 Now give the ingest Function the real webhook secret:
 
@@ -161,6 +165,7 @@ Import the repo into Vercel as a Next.js project. `vercel.json` already sets the
   - `LINEAR_API_KEY`, used by the New job form
   - `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY`, from `~/.config/marshal-factory/github-app.json`, so **Add repository** can list the repos the App reaches
   - `FACTORY_TEAM_KEY` and `FACTORY_LABEL`, if they differ from `FAC` and `factory`
+- Add `FACTORY_PRODUCTION_ENDPOINTS`, the endpoint id from step 4, for Preview (and Development, if you build there). Separate several endpoints with commas. A non-production build without it refuses to migrate.
   - Optional: `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET`, so you can paste a repo's secrets in the panel instead of running a command on the Mac
   - Optional: `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET` and `SLACK_OWNER_USER_ID` ([Connecting Slack](#connecting-slack))
 - Set the Ignored Build Step to `[ -z "$DATABASE_URL" ]`, so previews without a database are skipped. To get previews with their own Neon branch, connect Neon's Vercel integration. Each preview then migrates its own branch, and the migration guard stops any preview that points at production.
