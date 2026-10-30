@@ -4,9 +4,9 @@ import { db } from "../db/client";
 import { auditLog, codexSlotLeases, jobs, repoSettings, type JobRow } from "../db/schema";
 import type { RepoName } from "../lib/github/app";
 import { HostGoneError, hosts, isHibernated, WakeDeferredError, type HostedJob, type JobHost } from "../lib/host";
-import { deleteSnapshot, isModalGone, modal, modalHost, snapshotSandbox, terminateSandbox, tunnelUrl } from "../lib/modal-host";
 import { modalSecretName, parseDetail } from "../lib/onboarding";
 import { CODEX_AUTH, T3_PORT } from "../lib/sandbox";
+import { CLOUD_EXECUTIONS, isCloud } from "../lib/execution";
 import { readSettings, resolveExecution } from "../lib/settings";
 import type { JobId } from "../lib/sources/shapes";
 import { parseStop } from "../lib/stop";
@@ -17,11 +17,12 @@ import { config } from "./config";
 import { thisMachine } from "./heartbeat";
 import { flushSandboxOutbox } from "./outbox";
 import { isolated } from "./reconcile";
-import { CodexLoginError, createJobSandbox, installCodexLogin, markSlotUnusable, needsCodexSlot, pairT3, sandboxRuntime, startT3, stopT3, usableSlots, writeGithubToken } from "./sandbox";
+import { CodexLoginError, installCodexLogin, markSlotUnusable, needsCodexSlot, pairT3, sandboxRuntime, startT3, stopT3, usableSlots, writeGithubToken } from "./sandbox";
+import { backendOf, runningSandboxes } from "./sandbox-backend";
 import { threads } from "./threads";
 import { verifyingKeys } from "./verify";
 
-// What happens to a job's Modal sandbox after its launch. A sandbox bills by the second while it
+// What happens to a job's cloud sandbox after its launch, on whichever backend runs it (runner/sandbox-backend.ts). A sandbox bills by the second while it
 // runs, idle or not, so a job that waits on the outside world gives its sandbox up:
 //
 //   running     sandbox_id set; the thread works, or waits in pr or waiting until it settles
@@ -60,8 +61,8 @@ const wokenAt = new Map<string, number>();
 let waking = 0;
 
 /**
- * What counts against factory.sandbox.maxParallel on this machine: every job whose sandbox Modal
- * still runs, in any stage, every sandbox launch still setting up, and every wake under way. A
+ * What counts against factory.sandbox.maxParallel on this machine: every job whose sandbox its
+ * backend still runs, in any stage, every sandbox launch still setting up, and every wake under way. A
  * hibernated job, or one whose sandbox is gone but whose id stays so its thread reads as gone,
  * holds no room.
  */
@@ -72,11 +73,11 @@ export async function sandboxesInFlight(machineId: string) {
     .where(
       and(
         eq(jobs.machine_id, machineId),
-        or(isNotNull(jobs.sandbox_id), and(sql`${jobs.t3_thread_id} like ${`${PENDING}%`}`, or(eq(jobs.execution, "modal"), isNotNull(jobs.codex_slot)))),
+        or(isNotNull(jobs.sandbox_id), and(sql`${jobs.t3_thread_id} like ${`${PENDING}%`}`, or(inArray(jobs.execution, [...CLOUD_EXECUTIONS]), isNotNull(jobs.codex_slot)))),
       ),
     );
   const ids = rows.flatMap((r) => (r.sandbox_id ? [r.sandbox_id] : []));
-  const running = ids.length > 0 ? new Set((await modal.api.list(config.factory.sandbox.appName, { label: config.factory.label })).map((s) => s.sandboxId)) : new Set<string>();
+  const running = ids.length > 0 ? new Set((await runningSandboxes()).map((s) => s.sandboxId)) : new Set<string>();
   return rows.filter((r) => !r.sandbox_id || running.has(r.sandbox_id)).length + waking;
 }
 
@@ -172,7 +173,7 @@ export async function writeBackLogin(key: string, sandboxId: string, slot: strin
   if (!slot) return "no slot";
   let text: string | null;
   try {
-    text = await modalHost(sandboxId).readFile(CODEX_AUTH);
+    text = await backendOf(sandboxId).host(sandboxId).readFile(CODEX_AUTH);
   } catch (error) {
     if (!(error instanceof HostGoneError)) throw error;
     log("sandbox:login-writeback-skipped", { key, slot, reason: "the sandbox is gone" });
@@ -193,9 +194,9 @@ export async function writeBackLogin(key: string, sandboxId: string, slot: strin
 
 /** Every end of a job's sandbox: undelivered reports and the login leave it first. */
 export async function retireSandbox(key: string, sandboxId: string, slot: string | null) {
-  await flushSandboxOutbox(key, modalHost(sandboxId));
+  await flushSandboxOutbox(key, backendOf(sandboxId).host(sandboxId));
   await writeBackLogin(key, sandboxId, slot);
-  await terminateSandbox(sandboxId);
+  await backendOf(sandboxId).terminate(sandboxId);
   tokenWrites.delete(sandboxId);
 }
 
@@ -222,10 +223,10 @@ export async function loginFailed(key: string, slot: string) {
 type SandboxRow = Pick<JobRow, "key" | "sandbox_id" | "sandbox_snapshot" | "codex_slot" | "t3_thread_id" | "stage" | "stop_event_id" | "stop_sent_to"> &
   Partial<Pick<JobRow, "stop">>;
 
-/** Throws unless Modal no longer runs anything in the sandbox: a command there must find it gone. */
+/** Throws unless the backend no longer runs anything in the sandbox: a command there must find it gone. */
 async function verifyGone(sandboxId: string) {
   try {
-    await modalHost(sandboxId).exists("/");
+    await backendOf(sandboxId).host(sandboxId).exists("/");
   } catch (error) {
     if (error instanceof HostGoneError) return;
     throw error;
@@ -236,18 +237,18 @@ async function verifyGone(sandboxId: string) {
 /**
  * Ends everything the job's sandbox holds: the running sandbox, its snapshot and its slot. A stop
  * still owed to the thread is settled too, since the thread ended with the sandbox. A stop on its
- * way records the termination once Modal no longer answers for the sandbox; runner/stops.ts then
+ * way records the termination once its backend no longer answers for the sandbox; runner/stops.ts then
  * confirms it. Idempotent.
  */
 export async function teardownSandbox(row: SandboxRow) {
   if (!row.sandbox_id && !row.sandbox_snapshot && !row.codex_slot) return;
   if (row.sandbox_id) {
-    await recordJobCodexUsage(row.key, modalHost(row.sandbox_id));
+    await recordJobCodexUsage(row.key, backendOf(row.sandbox_id).host(row.sandbox_id));
     await retireSandbox(row.key, row.sandbox_id, row.codex_slot);
   }
   const stop = stopping(row) ? parseStop(row.stop) : null;
   if (row.sandbox_id && stop) await verifyGone(row.sandbox_id);
-  if (row.sandbox_snapshot) await deleteSnapshot(row.sandbox_snapshot);
+  if (row.sandbox_snapshot) await backendOf(row.sandbox_snapshot).discard(row.sandbox_snapshot);
   const threadEnded = stopOwed(row) && bindingOf(row.t3_thread_id) === "bound";
   const ended = row.sandbox_id ? `Ended cloud sandbox ${row.sandbox_id}; it no longer runs.` : "The sandbox was already hibernated; its snapshot is deleted.";
   await db
@@ -312,7 +313,8 @@ export async function hibernateIdle(now = Date.now()) {
     const quietSince = Math.max(row.stage_at?.getTime() ?? row.updated_at.getTime(), wokenAt.get(row.key) ?? 0);
     if (now - quietSince < graceMs) return undefined;
     const sandboxId = row.sandbox_id!;
-    const host = modalHost(sandboxId);
+    const backend = backendOf(sandboxId);
+    const host = backend.host(sandboxId);
     const state = await threads.state(row.t3_thread_id, host);
     if (state === "running") return undefined;
     if (state === "gone") {
@@ -333,7 +335,7 @@ export async function hibernateIdle(now = Date.now()) {
     await stopT3(host);
     let imageId: string;
     try {
-      imageId = await snapshotSandbox(sandboxId, config.factory.sandbox.snapshotTtlDays * 86_400_000);
+      imageId = await backend.hibernate(sandboxId, config.factory.sandbox.snapshotTtlDays * 86_400_000);
     } catch (error) {
       if (!(error instanceof HostGoneError)) await startT3(host).catch(() => {});
       throw error;
@@ -344,10 +346,10 @@ export async function hibernateIdle(now = Date.now()) {
       .where(and(eq(jobs.key, row.key), eq(jobs.sandbox_id, sandboxId), isNull(jobs.sandbox_snapshot)))
       .returning({ key: jobs.key });
     if (!kept) {
-      await deleteSnapshot(imageId);
+      await backend.discard(imageId);
       return undefined;
     }
-    await terminateSandbox(sandboxId);
+    await backend.release(sandboxId);
     tokenWrites.delete(sandboxId);
     await db.update(jobs).set({ sandbox_id: null, codex_slot: null }).where(and(eq(jobs.key, row.key), eq(jobs.sandbox_id, sandboxId)));
     log("sandbox:hibernated", { key: row.key, sandbox: sandboxId, stage: row.stage });
@@ -359,7 +361,7 @@ export async function hibernateIdle(now = Date.now()) {
  * Starts a hibernated job's sandbox again from its snapshot, with a freshly leased slot for a Codex thread, a fresh
  * GitHub token and a serving T3, and returns its host. A failure ends the new sandbox and frees the
  * slot, keeping the snapshot for the next try; a slot whose login fails is marked unusable. A
- * snapshot Modal no longer has throws HostGoneError, so the thread counts as gone.
+ * ref its backend no longer has throws HostGoneError, so the thread counts as gone.
  */
 export async function wakeJob(job: HostedJob): Promise<JobHost> {
   let [row] = await db.select().from(jobs).where(eq(jobs.key, job.key));
@@ -391,18 +393,20 @@ async function wakeInRoom(row: JobRow, snapshot: string, asleep: SQL | undefined
   try {
     const claudeToken = sandboxRuntime.claudeToken();
     const [repoRow] = await db.select().from(repoSettings).where(eq(repoSettings.repo, row.repo));
-    const created = await createJobSandbox({
-      namedSecrets: repoRow && (parseDetail(repoRow.onboarding_detail).secretsSet ?? []).length > 0 ? [modalSecretName(row.repo)] : [],
-      key: row.key,
-      attempt: row.attempt,
-      label: config.factory.label,
-      machineId: (await thisMachine()).id,
-      imageId: snapshot,
-      limits,
-      claudeToken,
-    }).catch((error: unknown) => {
-      throw isModalGone(error) ? new HostGoneError(`${row.key}'s snapshot ${snapshot} is gone: ${message(error)}`) : error;
-    });
+    const backend = backendOf(snapshot);
+    const created = await backend
+      .wake(snapshot, {
+        namedSecrets: repoRow && (parseDetail(repoRow.onboarding_detail).secretsSet ?? []).length > 0 ? [modalSecretName(row.repo)] : [],
+        key: row.key,
+        attempt: row.attempt,
+        label: config.factory.label,
+        machineId: (await thisMachine()).id,
+        limits,
+        claudeToken,
+      })
+      .catch((error: unknown) => {
+        throw backend.isGone(error) ? new HostGoneError(`${row.key}'s snapshot ${snapshot} is gone: ${message(error)}`) : error;
+      });
     sandboxId = created.sandboxId;
     const [recorded] = await db.update(jobs).set({ sandbox_id: sandboxId }).where(asleep).returning({ key: jobs.key });
     if (!recorded) throw new Error(`${row.key} changed while it was being woken`);
@@ -414,7 +418,7 @@ async function wakeInRoom(row: JobRow, snapshot: string, asleep: SQL | undefined
     await db.update(jobs).set({ sandbox_snapshot: null }).where(and(eq(jobs.key, row.key), eq(jobs.sandbox_id, sandboxId)));
     wokenAt.set(row.key, Date.now());
     log("sandbox:woken", { key: row.key, sandbox: sandboxId, slot });
-    await deleteSnapshot(snapshot).catch((error: unknown) => log("sandbox:snapshot-delete-failed", { key: row.key, snapshot, error: message(error) }));
+    await backend.afterWake(snapshot).catch((error: unknown) => log("sandbox:snapshot-delete-failed", { key: row.key, snapshot, error: message(error) }));
     return created.host;
   } catch (error) {
     if (error instanceof CodexLoginError) await loginFailed(row.key, error.slot);
@@ -439,7 +443,7 @@ export async function refreshTokens(now = Date.now()) {
     const last = tokenWrites.get(sandboxId);
     if (last !== undefined && now - last < TOKEN_REFRESH_MS) return undefined;
     try {
-      await writeGithubToken(modalHost(sandboxId), await sandboxRuntime.githubToken(row.repo as RepoName));
+      await writeGithubToken(backendOf(sandboxId).host(sandboxId), await sandboxRuntime.githubToken(row.repo as RepoName));
     } catch (error) {
       if (error instanceof HostGoneError) return undefined;
       throw error;
@@ -461,10 +465,10 @@ export async function openT3(jobId: JobId): Promise<PairingResult> {
   if (isHibernated(job)) return { refused: HIBERNATED_MESSAGE };
   if (!job.sandbox_id) return { refused: "This job does not run in a cloud sandbox." };
   try {
-    const tunnel = await tunnelUrl(job.sandbox_id, T3_PORT);
+    const tunnel = await backendOf(job.sandbox_id).tunnel(job.sandbox_id, T3_PORT);
     switch (tunnel.kind) {
       case "url":
-        return await pairT3(modalHost(job.sandbox_id), tunnel.url);
+        return await pairT3(backendOf(job.sandbox_id).host(job.sandbox_id), tunnel.url);
       case "no port":
         return { refused: "This sandbox started before T3 was reachable from outside it. It will be once it hibernates and wakes again." };
       case "not ready":
@@ -490,7 +494,7 @@ const suspects = { sandboxes: new Set<string>(), slots: new Set<string>() };
  */
 export async function reap() {
   const machine = await thisMachine();
-  const listed = await modal.api.list(config.factory.sandbox.appName, { label: config.factory.label });
+  const listed = await runningSandboxes();
   const running = new Set(listed.map((s) => s.sandboxId));
   const ours = listed.filter((s) => !s.tags.machine || s.tags.machine === machine.id).map((s) => s.sandboxId);
   const owned = new Set(
@@ -499,7 +503,7 @@ export async function reap() {
   const orphans = ours.filter((id) => !owned.has(id));
   const terminated: string[] = [];
   for (const id of orphans.filter((id) => suspects.sandboxes.has(id))) {
-    await terminateSandbox(id);
+    await backendOf(id).terminate(id);
     terminated.push(id);
   }
   suspects.sandboxes = new Set(orphans.filter((id) => !terminated.includes(id)));
@@ -523,17 +527,17 @@ export async function reap() {
   return { terminated, freed, suspects: suspects.sandboxes.size + suspects.slots.size };
 }
 
-/** Whether this machine has anything on Modal to look after, so a runner that never used it never calls Modal. */
-async function usesModal() {
+/** Whether this machine has anything in a cloud sandbox to look after, so a runner that never used one never calls a backend. */
+async function usesSandboxes() {
   const [{ count }] = await db.select({ count: sql<number>`count(*)::int` }).from(jobs).where(and(await mine(), holdsSandbox));
-  return count > 0 || resolveExecution(await readSettings(db)) === "modal";
+  return count > 0 || isCloud(resolveExecution(await readSettings(db)));
 }
 
 let lastReap = 0;
 
 /** The timer's sandbox pass; each step on its own, so one failing does not skip the rest. */
 export async function tickSandboxes(now = Date.now()) {
-  const reapDue = now - lastReap >= REAP_EVERY_MS && (await usesModal());
+  const reapDue = now - lastReap >= REAP_EVERY_MS && (await usesSandboxes());
   const reaped = reapDue ? await isolated(reap) : undefined;
   if (reaped && !("error" in reaped)) lastReap = now;
   return {

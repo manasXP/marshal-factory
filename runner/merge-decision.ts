@@ -3,6 +3,7 @@ import { and, eq, isNotNull, inArray } from "drizzle-orm";
 import { db } from "../db/client";
 import { auditLog, jobEvidence, jobs, type AuditRow, type RepoSettingsRow } from "../db/schema";
 import { parseAssessment } from "../lib/assessment";
+import { isCloud } from "../lib/execution";
 import { headEvidence, type EvidenceRow, type HeadEvidence, type PlannedCheck } from "../lib/evidence";
 import { parseDetail } from "../lib/onboarding";
 import { CHECKS, type Recipe } from "../lib/recipe";
@@ -115,7 +116,7 @@ async function evaluate(job: Job, policy: RepoPolicy, previous: MergeDecision | 
     now,
     evidence,
     runner,
-    browser: job.execution === "modal",
+    browser: isCloud(job.execution),
     trustEdits: await changedTrust(job, detail, pr, required),
   });
   return { decision, headSha: detail.headSha, headSeenAt, review: reviewSummary(pr), evidence, runner };

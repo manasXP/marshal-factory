@@ -1,6 +1,7 @@
 import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "../db/client";
 import { jobs, type JobRow } from "../db/schema";
+import { isCloud } from "../lib/execution";
 import { hosts } from "../lib/host";
 import { parseJob, sourceFor } from "../lib/sources";
 import type { JobId } from "../lib/sources/shapes";
@@ -170,7 +171,7 @@ async function step(row: JobRow, me: string, timings: StopTimings, now: number) 
   if (stop.how === "terminate") return (await settle(row, stop, "confirmed", stop.step ?? "Ended the job's sandbox.", now)) && "confirmed";
   if (binding === "none") return (await settle(row, stop, "confirmed", "No thread was started, so nothing ran.", now)) && "confirmed";
   if (binding === "pending") return undefined; // the launch binds it, and bindThread delivers the stop
-  if (row.execution === "modal") return (await settle(row, stop, "confirmed", "The job's sandbox is gone, and its thread with it.", now)) && "confirmed";
+  if (isCloud(row.execution)) return (await settle(row, stop, "confirmed", "The job's sandbox is gone, and its thread with it.", now)) && "confirmed";
   const threadId = row.t3_thread_id!;
   if (row.stop_sent_to !== threadId) return undefined; // still owed; deliverStops sends it
   if (stop.checkedAt && now - ms(stop.checkedAt) < timings.checkMs) return undefined;
