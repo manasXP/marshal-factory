@@ -1,4 +1,5 @@
 import type { JobRow } from "../../db/schema";
+import { github } from "./github";
 import { linear } from "./linear";
 import { isRegisteredSource, jobId, SOURCE_SHAPES, type SourceShape } from "./shapes";
 import type { Job, JobSource, SourceAdapter } from "./types";
@@ -8,7 +9,7 @@ export { jobId } from "./shapes";
 // The runner, the panel and the ingest function reach a source only through its adapter, by the
 // job's `source`. Adding a source is an adapter and a shape here; nothing outside lib/sources changes.
 
-export const SOURCES: { [S in JobSource]: SourceAdapter<S> } = { linear };
+export const SOURCES: { [S in JobSource]: SourceAdapter<S> } = { linear, github };
 
 export const sourceFor = <S extends JobSource>(source: S): SourceAdapter<S> => {
   const adapter = SOURCES[source];

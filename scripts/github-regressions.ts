@@ -214,7 +214,7 @@ async function setupScriptEndToEnd(api: string) {
     ) as Record<string, unknown>;
     assert.deepEqual(
       [manifest.name, manifest.url, manifest.public, manifest.hook_attributes, manifest.redirect_url, manifest.setup_url, manifest.default_events],
-      ["marshal-factory-test", "https://github.com/test/marshal-factory", false, { url: "https://ingest.invalid/webhooks/github", active: true }, `${base}/callback`, `${base}/installed`, ["pull_request", "pull_request_review", "push", "issues"]],
+      ["marshal-factory-test", "https://github.com/test/marshal-factory", false, { url: "https://ingest.invalid/webhooks/github", active: true }, `${base}/callback`, `${base}/installed`, ["pull_request", "pull_request_review", "push", "issues", "issue_comment"]],
     );
     assert.deepEqual(manifest.default_permissions, { metadata: "read", contents: "write", pull_requests: "write", checks: "write", issues: "write", statuses: "read" });
 
