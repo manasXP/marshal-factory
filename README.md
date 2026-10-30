@@ -170,7 +170,13 @@ Import the repo into Vercel as a Next.js project. `vercel.json` already sets the
   - Optional: `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET` and `SLACK_OWNER_USER_ID` ([Connecting Slack](#connecting-slack))
 - Set the Ignored Build Step to `[ -z "$DATABASE_URL" ]`, so previews without a database are skipped. To get previews with their own Neon branch, connect Neon's Vercel integration. Each preview then migrates its own branch, and the migration guard stops any preview that points at production.
 
-Deploy, then create your owner account. Sign-up is off by default. The [owner account steps](docs/operations.md#panel-access-and-deploys) turn it on briefly, so you can register with an address from `FACTORY_OWNER_EMAILS` and confirm it with the emailed code.
+Deploy, then add the panel's production URL to Neon Auth's trusted domains; the example uses `https://marshal-factory.vercel.app`, so put your own domain in its place. A new branch has none, and without this sign-up fails with "Create account failed: Invalid origin.":
+
+```sh
+neon neon-auth domain add https://marshal-factory.vercel.app --branch main
+```
+
+Then create your owner account. Sign-up is off by default. The [owner account steps](docs/operations.md#panel-access-and-deploys) turn it on briefly, so you can register with an address from `FACTORY_OWNER_EMAILS` and confirm it with the emailed code.
 
 ### 9. Start the runner
 
