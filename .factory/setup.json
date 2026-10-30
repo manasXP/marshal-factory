@@ -1,0 +1,9 @@
+{
+  "runtimes": { "bun": "1.4.4" },
+  "setup": ["bun install --frozen-lockfile"],
+  "checks": {
+    "lint": "bun run lint",
+    "typecheck": "bunx next typegen && bunx tsc --noEmit -p ."
+  },
+  "warmKey": ["package.json", "bun.lock"]
+}
