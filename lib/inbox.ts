@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { JobRow } from "../db/schema";
+import { isCloud } from "./execution";
 import { MERGE_VIAS, mergeDecisionSchema, type MergeDecision } from "./merge-decision";
 import { parseStop, stopLine, stopNeedsOwner, stopView } from "./stop";
 
@@ -103,12 +104,12 @@ export function inboxReason(item: InboxItem<InboxJob & Pick<JobRow, "question" |
       if (decision?.outcome === "merge" && decision.autonomy === "trial") return "Would merge (trial)";
       return decision?.reasons[0] ?? "Ready for your review";
     case "failed": {
-      const stop = stopView(job.stop, job.execution === "modal");
+      const stop = stopView(job.stop, isCloud(job.execution));
       const summary = job.stage_summary ?? "The job failed.";
       return stop?.kind === "stopping" ? `${stopLine(stop)} · ${summary}` : summary;
     }
     case "stop_unconfirmed": {
-      const stop = stopView(job.stop, job.execution === "modal");
+      const stop = stopView(job.stop, isCloud(job.execution));
       return stop?.kind === "unconfirmed" ? stop.reason : "The runner could not confirm that the work stopped.";
     }
     default: {

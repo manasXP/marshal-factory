@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { ExecError } from "../lib/exec";
 import { eventSchema, type FactoryEvent } from "../lib/events";
+import { isCloud } from "../lib/execution";
 import { combined, planChecks, runChecks, type CheckRunner } from "../lib/evidence";
 import { attemptBranch } from "../lib/factory";
 import { ensureAwake, HostAsleepError, HostGoneError, WakeDeferredError, type HostedJob, type JobHost } from "../lib/host";
@@ -40,7 +41,7 @@ export const forgetVerifications = () => flights.clear();
 export function runnerVerification(job: VerifyJob, sha: string, policy: RepoPolicy, previous: MergeDecision | null, now: number): RunnerVerification {
   if (policy.autonomy !== "auto") return { kind: "unavailable", reason: "the factory runs the checks itself only when the repo merges on its own" };
   if (!job.sandbox_id && !job.sandbox_snapshot) {
-    return { kind: "unavailable", reason: job.execution === "modal" ? "the job has no sandbox left to run them in" : "the run isn't in a cloud sandbox, so the factory can't run them itself" };
+    return { kind: "unavailable", reason: isCloud(job.execution) ? "the job has no sandbox left to run them in" : "the run isn't in a cloud sandbox, so the factory can't run them itself" };
   }
   const flight = flights.get(job.key);
   // A run for an older head still holds the sandbox; this head waits for it to end.

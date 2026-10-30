@@ -7,6 +7,12 @@ export type Execution = z.infer<typeof executionSchema>;
 
 export const DEFAULT_EXECUTION: Execution = "local";
 
+/** The executions that run each job in its own cloud sandbox, one per sandbox backend (runner/sandbox-backend.ts). */
+export const CLOUD_EXECUTIONS = ["modal"] as const satisfies readonly Execution[];
+export type CloudExecution = (typeof CLOUD_EXECUTIONS)[number];
+export const isCloud = (execution: string | null | undefined): execution is CloudExecution =>
+  (CLOUD_EXECUTIONS as readonly (string | null | undefined)[]).includes(execution);
+
 /**
  * Where a claimed job's sandbox is: running while sandbox_id is set, hibernated while only its
  * snapshot is left, null for a job that never ran in one or gave it back.

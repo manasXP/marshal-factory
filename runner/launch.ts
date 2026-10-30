@@ -3,7 +3,6 @@ import { z } from "zod";
 import type { ExecError } from "../lib/exec";
 import type { RepoName } from "../lib/github/app";
 import { HostGoneError, hosts, localHost, type JobHost } from "../lib/host";
-import { terminateSandbox } from "../lib/modal-host";
 import { withPlaybook } from "../lib/playbook";
 import { builtVersions, imageProblem, REPO_DIR } from "../lib/sandbox";
 import { baseImageBuild } from "./base-image";
@@ -13,7 +12,7 @@ import { listThreads, showThread, startThread as t3Start } from "../lib/t3-clien
 import { PENDING } from "./binding";
 import { thisMachine } from "./heartbeat";
 import type { JobSource } from "../lib/sources/types";
-import type { Execution } from "../lib/execution";
+import { type Execution, isCloud } from "../lib/execution";
 import type { HarnessChoice } from "../lib/settings";
 import type { RepoSettingsRow } from "../db/schema";
 import { routeRepo, withRepoDefaults, type Registry } from "../lib/repositories";
@@ -36,8 +35,9 @@ import {
   type LaunchSlot,
 } from "./ops";
 import { loginFailed, noteTokenWritten, retireSandbox, sandboxesInFlight } from "./lifecycle";
+import { backendFor } from "./sandbox-backend";
 import { announceFallbacks, capabilities, overrideRuntime, planLaunch, splitByExecution } from "./overrides";
-import { CodexLoginError, createJobSandbox, ingestConfig, needsCodexSlot, sandboxHarness, sandboxRuntime, setupSandbox, usableSlots, type CodexLogin } from "./sandbox";
+import { CodexLoginError, ingestConfig, needsCodexSlot, sandboxHarness, sandboxRuntime, setupSandbox, usableSlots, type CodexLogin } from "./sandbox";
 
 const sh = async (host: JobHost, cmd: string, args: string[], cwd?: string) =>
   (await host.run(cmd, args, { cwd, timeoutMs: 60_000 })).stdout.trim();
@@ -96,7 +96,7 @@ async function threadBranches(checkout: string, host: JobHost) {
 }
 
 type PendingLaunch = Awaited<ReturnType<typeof pendingLaunches>>[number];
-const inSandbox = (p: Pick<PendingLaunch, "execution" | "sandbox_id" | "codex_slot">) => p.execution === "modal" || p.sandbox_id !== null || p.codex_slot !== null;
+const inSandbox = (p: Pick<PendingLaunch, "execution" | "sandbox_id" | "codex_slot">) => isCloud(p.execution) || p.sandbox_id !== null || p.codex_slot !== null;
 
 /** Ends a launch that made no thread: its sandbox first, so a cleared row never points at a live one. */
 export async function releaseSandboxLaunch(key: string, marker: string, sandboxId: string | null, slot: string | null) {
@@ -269,7 +269,7 @@ export async function launchQueued(onWorktree: (check: Record<string, unknown>) 
   }
   if (waiting.length > 0) overrideRuntime.log("override:waiting", { waiting });
   if (repoDefaults.length > 0) overrideRuntime.log("repo:default-skipped", { repos: repoDefaults });
-  const noCheckout = planned.filter((p) => p.execution === "modal" && !checkouts.has(p.repo) && !p.ticket?.execution).map((p) => p.key);
+  const noCheckout = planned.filter((p) => isCloud(p.execution) && !checkouts.has(p.repo) && !p.ticket?.execution).map((p) => p.key);
   if (noCheckout.length > 0) overrideRuntime.log("repo:no-checkout", { modal: noCheckout });
   const jobs = new Map(queued.map((q) => [q.key, q.job]));
   const claimed: Claimed = (entry) => announceFallbacks(jobs.get(entry.key)!, entry.ticket);
@@ -445,7 +445,8 @@ export async function launchInSandboxes(pending: readonly LaunchEntry[], slot: L
       try {
         const codex = lease.slot ? loginOf(lease.slot) : null;
         const githubToken = await runtime.githubToken(entry.repo as RepoName);
-        const created = await createJobSandbox({
+        const backend = backendFor("modal");
+        const created = await backend.create({
           key: entry.key,
           attempt: entry.attempt,
           label: config.factory.label,
@@ -458,7 +459,7 @@ export async function launchInSandboxes(pending: readonly LaunchEntry[], slot: L
         try {
           await recordSandbox(entry.key, lease.marker, created.sandboxId);
         } catch (error) {
-          await terminateSandbox(created.sandboxId);
+          await backend.terminate(created.sandboxId);
           throw error;
         }
         host = created.host;

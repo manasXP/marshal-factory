@@ -22,12 +22,12 @@ import type { Execution } from "../lib/execution";
 import type { TicketRecord } from "../lib/ticket-overrides";
 import { readRegistry, registerRepos, routeRepo, type Registry } from "../lib/repositories";
 import { ensureAwake, HostGoneError, hosts, isHibernated, WakeDeferredError, type JobHost } from "../lib/host";
-import { modalHost } from "../lib/modal-host";
 import { requestedStop } from "../lib/stop";
 import { bindingOf, canReclaimSql, heldStoppingSql, isStopped, PENDING, stopDeliverableSql, stoppingSql } from "./binding";
 import { config } from "./config";
 import { thisMachine } from "./heartbeat";
 import { leaseSlot, teardownSandbox } from "./lifecycle";
+import { backendOf } from "./sandbox-backend";
 import { confirmStops, stopDelivered } from "./stops";
 import { postEvent } from "./ingest-client";
 import { recordCodexUsage } from "./codex-usage";
@@ -45,7 +45,7 @@ import { isSpendPause, money, pauseQuestion, raisedLimit, spendResumeMessage } f
 
 export { config, threads };
 
-hosts.sandbox = modalHost;
+hosts.sandbox = (sandboxId) => backendOf(sandboxId).host(sandboxId);
 
 const mine = async () => eq(jobs.machine_id, (await thisMachine()).id);
 
