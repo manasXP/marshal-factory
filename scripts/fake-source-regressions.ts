@@ -67,6 +67,8 @@ registerSource(
 
 // Every Linear call but an empty ready list fails the script.
 const linearReached: string[] = [];
+// The test branch copies production, whose enabled repos the GitHub source would list for real.
+SOURCES.github = { ...SOURCES.github, ready: async () => [] };
 SOURCES.linear = new Proxy({ source: "linear", ready: async () => [] } as unknown as typeof SOURCES.linear, {
   get: (target, prop) =>
     prop in target

@@ -53,6 +53,8 @@ const fakeClient = {
   setState: record("setState", undefined),
 };
 SOURCES.linear = createLinearAdapter(() => ({ client: fakeClient as never, db, limits: factorySchema.parse({}) }));
+// The test branch copies production, whose enabled repos the GitHub source would list for real.
+SOURCES.github = { ...SOURCES.github, ready: async () => [] };
 
 const EXPECTED = {
   "writes": {

@@ -3,6 +3,7 @@ import type { CloudExecution } from "../lib/execution";
 import type { JobHost } from "../lib/host";
 import { deleteSnapshot, isModalGone, modal, modalHost, sandboxName, snapshotSandbox, terminateSandbox, tunnelUrl, type ListedSandbox, type Tunnel } from "../lib/modal-host";
 import { boxIdOf, forgetBox, isUpstashGone, isUpstashId, realUpstash, rememberBox, upstash, upstashHost, upstashId } from "../lib/upstash-host";
+import { inTestMode } from "../lib/test-mode";
 import { config } from "./config";
 import { thisMachine } from "./heartbeat";
 import { createJobSandbox, sandboxSecrets } from "./sandbox";
@@ -149,5 +150,9 @@ export async function runningSandboxes(): Promise<ListedSandbox[]> {
   return (await Promise.all(BACKENDS.filter((b) => backendInUse(b.kind)).map((b) => b.listRunning()))).flat();
 }
 
-/** Upstash is reached only with its key; Modal keeps its old behaviour of always being listed. */
-export const backendInUse = (kind: CloudExecution) => kind !== "upstash" || Boolean(process.env.UPSTASH_BOX_API_KEY) || upstash.api !== realUpstash;
+/**
+ * Upstash is reached only with its key; Modal keeps its old behaviour of always being listed. In a
+ * regression run only a test that fakes Upstash reaches it, whatever key the environment holds.
+ */
+export const backendInUse = (kind: CloudExecution) =>
+  kind !== "upstash" || upstash.api !== realUpstash || (Boolean(process.env.UPSTASH_BOX_API_KEY) && !inTestMode());

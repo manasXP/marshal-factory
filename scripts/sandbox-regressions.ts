@@ -173,7 +173,7 @@ try {
   assert.equal((await row(keys[0]!)).t3_thread_id, null, "nor with an outdated one");
   assert.deepEqual(events.at(-1), {
     event: "sandbox:no-image",
-    detail: { queued: [keys[0]], reason: `Rebuild the sandbox image: Claude Code 2.1.309 → ${pins.claudeCodeVersion}; the runner rebuilds it on its tick, or run bun scripts/sandbox-image.ts` },
+    detail: { execution: "modal", queued: [keys[0]], reason: `Rebuild the sandbox image: Claude Code 2.1.309 → ${pins.claudeCodeVersion}; the runner rebuilds it on its tick, or run bun scripts/sandbox-image.ts` },
   });
   sandboxRuntime.image = () => image;
   assert.equal(fake.created, 0, "and no sandbox was created");
