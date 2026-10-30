@@ -262,6 +262,10 @@ export async function setupSandbox(host: JobHost, setup: SandboxSetup, codexMode
   return { choice, ...(fallback && { fallback }) };
 }
 
+/** A command that writes outside the host user's own directories: through sudo where that user is not root. */
+export const asRoot = (host: Pick<JobHost, "unprivileged">, command: string, args: string[]): [string, string[]] =>
+  host.unprivileged ? ["sudo", ["-n", command, ...args]] : [command, args];
+
 /**
  * T3 cuts each thread's worktree from origin/main, so the repo's committed wiring is what the
  * thread sees. Its factory paths are this runner's checkout; each one becomes a link to the
@@ -269,9 +273,10 @@ export async function setupSandbox(host: JobHost, setup: SandboxSetup, codexMode
  */
 async function wire(host: JobHost) {
   const committed = wiredRoots(await host.readFile(`${REPO_DIR}/.claude/settings.json`), await host.readFile(`${REPO_DIR}/.mcp.json`));
+  // A committed root is this runner's checkout path, anywhere on the disk, so it may need root to create.
   for (const root of committed.filter((r) => r !== FACTORY_ROOT)) {
-    await host.run("mkdir", ["-p", root.slice(0, root.lastIndexOf("/")) || "/"], { timeoutMs: 30_000 });
-    await host.run("ln", ["-sfn", FACTORY_ROOT, root], { timeoutMs: 30_000 });
+    await host.run(...asRoot(host, "mkdir", ["-p", root.slice(0, root.lastIndexOf("/")) || "/"]), { timeoutMs: 30_000 });
+    await host.run(...asRoot(host, "ln", ["-sfn", FACTORY_ROOT, root]), { timeoutMs: 30_000 });
   }
   const parse = (text: string | null): Json => (text ? (JSON.parse(text) as Json) : {});
   const userSettings = `${pathsOf(host).home}/.claude/settings.json`;

@@ -135,7 +135,7 @@ export function StageCard({
 }) {
   const { latest } = card;
   const where = card.runsOn && whereLine(card.runsOn, machineName);
-  const sandbox = card.runsOn?.kind === "modal" ? card.runsOn.sandbox : null;
+  const sandbox = card.runsOn?.kind === "cloud" ? card.runsOn.sandbox : null;
   return (
     <div data-card={card.id} className={cn(cardClass(selected), "gap-1.5")}>
       {latest && (
@@ -171,7 +171,7 @@ export function StageCard({
           )}
           {where && (
             <span title={sandbox ? `${where} · ${sandbox}` : where} className="flex items-center gap-1">
-              {card.runsOn?.kind === "modal" ? <CloudIcon className="size-3.5" aria-label={where} /> : <MonitorIcon className="size-3.5" aria-label={where} />}
+              {card.runsOn?.kind === "cloud" ? <CloudIcon className="size-3.5" aria-label={where} /> : <MonitorIcon className="size-3.5" aria-label={where} />}
               {sandbox === "hibernated" && <span className="size-1.5 rounded-full bg-muted-foreground/50" aria-label="hibernated" />}
             </span>
           )}

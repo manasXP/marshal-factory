@@ -215,9 +215,9 @@ const machine = (over: Partial<Parameters<typeof runsOn>[0]>) => ({ execution: n
 assert.equal(runsOn(machine({})), null, "not launched: nothing to say");
 assert.equal(whereLine(runsOn(machine({ execution: "local", machine_id: "m1" }))!, "Mac mini"), "Local · Mac mini");
 assert.equal(whereLine(runsOn(machine({ machine_id: "m1" }))!, null), "Local · m1", "a launch recorded before execution was kept, without a sandbox, ran locally");
-assert.deepEqual(runsOn(machine({ execution: "modal", machine_id: "m1", sandbox_id: "sb" })), { kind: "modal", sandbox: "running" });
-assert.deepEqual(runsOn(machine({ machine_id: "m1", sandbox_snapshot: "im" })), { kind: "modal", sandbox: "hibernated" });
-assert.equal(whereLine({ kind: "modal", sandbox: null }, "Mac mini"), "Cloud sandbox");
+assert.deepEqual(runsOn(machine({ execution: "modal", machine_id: "m1", sandbox_id: "sb" })), { kind: "cloud", cloud: "modal", sandbox: "running" });
+assert.deepEqual(runsOn(machine({ machine_id: "m1", sandbox_snapshot: "im" })), { kind: "cloud", cloud: "modal", sandbox: "hibernated" });
+assert.equal(whereLine({ kind: "cloud", cloud: "modal", sandbox: null }, "Mac mini"), "Cloud sandbox");
 const stamp = Date.now();
 const cardJob = { ...linearJob(`card-${stamp}`, `CARD-${stamp}`), stage: "implementing" as const, provider: "codex", model: "gpt-6-astra", execution: "modal" as const, machine_id: "m1", sandbox_id: "sb" };
 const [card] = boardCards([cardJob as never], [], harnesses);

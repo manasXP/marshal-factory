@@ -4,10 +4,10 @@ import type { ExecError } from "../lib/exec";
 import type { RepoName } from "../lib/github/app";
 import { HostGoneError, hosts, localHost, type JobHost } from "../lib/host";
 import { withPlaybook } from "../lib/playbook";
-import { builtVersions, imageProblem, REPO_DIR, upstashImageProblem } from "../lib/sandbox";
+import { builtVersions, imageProblem, pathsOf, REPO_DIR } from "../lib/sandbox";
 import { baseImageBuild } from "./base-image";
 import { modalSecretName, parseDetail, repoImage } from "../lib/onboarding";
-import { RECIPE_PATH, UNMERGED_RECIPE_PATH, type Recipe } from "../lib/recipe";
+import { RECIPE_PATH, unmergedRecipePath, type Recipe } from "../lib/recipe";
 import { listThreads, showThread, startThread as t3Start } from "../lib/t3-client";
 import { PENDING } from "./binding";
 import { thisMachine } from "./heartbeat";
@@ -248,9 +248,10 @@ export async function launchQueued(onWorktree: (check: Record<string, unknown>) 
     if (problems.length > 0 && !repoDefaults.some((d) => d.repo === job.repo)) repoDefaults.push({ repo: job.repo, problems });
     const row = registry.find((r) => r.repo === job.repo);
     const image = repoImage(row, null);
-    // Only Modal starts from a repo's warm image, so only Modal waits for its onboarding.
+    // Per repo: only Modal starts from a repo's warm image, so only Modal waits for its onboarding, and only Modal has repo secrets.
     const modal = can.cloud.modal ?? (image.kind === "blocked" ? image.reason : null);
-    const plan = planLaunch(asked, defaults, harnesses, { ...can, cloud: { ...can.cloud, modal }, checkout: checkouts.has(job.repo) });
+    const upstash = can.cloud.upstash ?? upstashRepoProblem(row);
+    const plan = planLaunch(asked, defaults, harnesses, { ...can, cloud: { modal, upstash }, checkout: checkouts.has(job.repo) });
     switch (plan.kind) {
       case "launch": {
         // The claim routed the job already; a Repository label that could not apply is told like any other fallback.
@@ -348,9 +349,13 @@ export type SandboxStart = { imageId: string; namedSecrets: string[]; warm?: { s
  * base image does; warm repo images and repo secrets are Modal's only for now.
  */
 export function upstashStart(row: RepoSettingsRow | undefined, imageId: string): SandboxStart {
-  const detail = parseDetail(row?.onboarding_detail);
-  if (row && (detail.secretsSet ?? []).length > 0) return { blocked: `${row.repo} has repo secrets, which Upstash Box jobs cannot use yet; run it on Modal` };
-  return { imageId, namedSecrets: [] };
+  const problem = upstashRepoProblem(row);
+  return problem ? { blocked: problem } : { imageId, namedSecrets: [] };
+}
+
+/** Why a repo's jobs cannot run on Upstash Box, or null when they can: repo secrets are Modal's only. */
+export function upstashRepoProblem(row: RepoSettingsRow | undefined) {
+  return row && (parseDetail(row.onboarding_detail).secretsSet ?? []).length > 0 ? `${row.repo} has repo secrets, which Upstash Box jobs cannot use yet` : null;
 }
 
 export function sandboxStart(row: RepoSettingsRow | undefined, base: { imageId: string; builtAt: string; versions: ReturnType<typeof builtVersions> }): SandboxStart {
@@ -417,7 +422,7 @@ export async function launchInSandboxes(
   const limits = config.factory.sandbox;
   const runtime = sandboxRuntime;
   const image = execution === "upstash" ? runtime.upstashImage() : runtime.image();
-  const problem = execution === "upstash" ? upstashImageProblem(image, limits) : imageProblem(image, limits);
+  const problem = imageProblem(image, limits, execution);
   if (problem || !image) {
     // The runner rebuilds Modal's image on its own; the Upstash snapshot is built by hand.
     const build = execution === "modal" ? baseImageBuild() : undefined;
@@ -501,8 +506,9 @@ export async function launchInSandboxes(
         noteTokenWritten(created.sandboxId);
         const unmerged = unmergedRecipe(registry.find((r) => r.repo === entry.repo));
         if (unmerged) {
-          await host.run("mkdir", ["-p", dirname(UNMERGED_RECIPE_PATH)], { timeoutMs: 30_000 });
-          await host.writeFile(UNMERGED_RECIPE_PATH, JSON.stringify(unmerged));
+          const path = unmergedRecipePath(pathsOf(host).home);
+          await host.run("mkdir", ["-p", dirname(path)], { timeoutMs: 30_000 });
+          await host.writeFile(path, JSON.stringify(unmerged));
         }
         ran = outcome.choice;
         if (outcome.fallback) {

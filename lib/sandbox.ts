@@ -156,21 +156,20 @@ export function readSandboxImage(path = SANDBOX_IMAGE_PATH): SandboxImage | null
 /** How an outdated image gets rebuilt: runner/base-image.ts does it on the tick. */
 export const REBUILDS_ITSELF = "the runner rebuilds it on its tick, or run bun scripts/sandbox-image.ts";
 
-/** Why this image cannot launch jobs under these limits, or undefined when it can. */
-export function imageProblem(image: SandboxImage | null, limits: Pins) {
-  if (!image) return "no sandbox image is built; run bun scripts/sandbox-image.ts";
-  const drift = imageDrift(builtVersions(image), pinnedVersions(limits));
-  return drift.length > 0 ? `${rebuildText(drift)}; ${REBUILDS_ITSELF}` : undefined;
-}
-
 /** The command that builds the Upstash base snapshot; the runner does not rebuild it on its own. */
 export const UPSTASH_IMAGE_BUILD = "bun scripts/sandbox-image.ts --backend upstash";
 
-/** Why the Upstash base snapshot cannot launch jobs under these limits, or undefined when it can. */
-export function upstashImageProblem(image: SandboxImage | null, limits: Pins) {
-  if (!image) return `no Upstash base snapshot is built; run ${UPSTASH_IMAGE_BUILD}`;
+const IMAGE_WORDING = {
+  modal: { missing: "no sandbox image is built; run bun scripts/sandbox-image.ts", what: "the sandbox image", rebuild: REBUILDS_ITSELF },
+  upstash: { missing: `no Upstash base snapshot is built; run ${UPSTASH_IMAGE_BUILD}`, what: "the Upstash base snapshot", rebuild: `run ${UPSTASH_IMAGE_BUILD}` },
+} as const;
+
+/** Why this cloud's image cannot launch jobs under these limits, or undefined when it can. */
+export function imageProblem(image: SandboxImage | null, limits: Pins, cloud: keyof typeof IMAGE_WORDING = "modal") {
+  const wording = IMAGE_WORDING[cloud];
+  if (!image) return wording.missing;
   const drift = imageDrift(builtVersions(image), pinnedVersions(limits));
-  return drift.length > 0 ? `${rebuildText(drift, "the Upstash base snapshot")}; run ${UPSTASH_IMAGE_BUILD}` : undefined;
+  return drift.length > 0 ? `${rebuildText(drift, wording.what)}; ${wording.rebuild}` : undefined;
 }
 
 export const slotAuthPath = (slot: string) => join(slot, "auth.json");

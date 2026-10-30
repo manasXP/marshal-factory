@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { CloudExecution } from "../lib/execution";
 import type { JobHost } from "../lib/host";
 import { deleteSnapshot, isModalGone, modal, modalHost, sandboxName, snapshotSandbox, terminateSandbox, tunnelUrl, type ListedSandbox, type Tunnel } from "../lib/modal-host";
-import { boxIdOf, forgetBox, isUpstashGone, isUpstashId, realUpstash, rememberBox, upstash, upstashHost, upstashId } from "../lib/upstash-host";
+import { boxHandle, forgetBox, isUpstashGone, isUpstashId, realUpstash, rememberBox, upstash, upstashHost, upstashId } from "../lib/upstash-host";
 import { inTestMode } from "../lib/test-mode";
 import { config } from "./config";
 import { thisMachine } from "./heartbeat";
@@ -14,7 +14,9 @@ export type JobSandboxSpec = Parameters<typeof createJobSandbox>[0];
 /**
  * A cloud a job's sandbox runs in, as the job's lifecycle (runner/lifecycle.ts) and launch use it.
  * A hibernation ref is what `sandbox_snapshot` keeps while the job sleeps; how a backend makes one
- * and wakes from it is its own (Modal snapshots the filesystem and starts a new sandbox from it).
+ * and wakes from it is its own. Modal snapshots the filesystem into an image and starts a new
+ * sandbox from it; Upstash pauses the box, which is then its own ref. Every way of ending a sandbox
+ * says which ref it must keep, so the backend never ends a hibernated job's only state.
  */
 export type SandboxBackend = {
   readonly kind: CloudExecution;
@@ -22,20 +24,23 @@ export type SandboxBackend = {
   owns(id: string): boolean;
   host(sandboxId: string): JobHost;
   create(spec: JobSandboxSpec): Promise<{ sandboxId: string; host: JobHost }>;
-  /** Ends the sandbox; ending one already gone is not an error. */
-  terminate(sandboxId: string): Promise<void>;
-  /** The sandboxes of the factory's label that still run, with their tags. */
+  /**
+   * Ends the sandbox; ending one already gone is not an error. When `keep` names the job's
+   * hibernation ref and that ref is this sandbox, it is put to sleep instead of ended.
+   */
+  terminate(sandboxId: string, keep?: string | null): Promise<void>;
+  /** The factory's sandboxes that still exist, asleep or not, with their tags; `status` is set where the backend reports one. */
   listRunning(): Promise<ListedSandbox[]>;
-  /** Keeps a settled sandbox's state as a ref, for at least `ttlMs`; the sandbox still runs until `release`. */
+  /** Keeps a settled sandbox's state as a ref, for at least `ttlMs`; `terminate(sandboxId, ref)` then gives the sandbox up. */
   hibernate(sandboxId: string, ttlMs: number): Promise<string>;
-  /** Gives up the running sandbox once its ref is recorded. */
-  release(sandboxId: string): Promise<void>;
   /** Wakes a hibernated job: a running sandbox from its ref, which the caller records before using it. */
   wake(ref: string, spec: Omit<JobSandboxSpec, "imageId">): Promise<{ sandboxId: string; host: JobHost }>;
   /** Called once a woken sandbox serves; whatever the ref held that the sandbox no longer needs goes. */
   afterWake(ref: string): Promise<void>;
-  /** Gives up a ref for good. */
-  discard(ref: string): Promise<void>;
+  /** Gives up a ref for good, unless `holder`, a sandbox the job still holds, is that ref. */
+  discard(ref: string, holder?: string | null): Promise<void>;
+  /** Whether the backend ends a ref once its ttl passes; one that does not has the reap expire it. */
+  readonly refsExpire: boolean;
   /** Whether an error from this backend means the sandbox or ref no longer exists. */
   isGone(error: unknown): boolean;
   tunnel(sandboxId: string, port: number): Promise<Tunnel>;
@@ -47,13 +52,14 @@ export const modalBackend: SandboxBackend = {
   owns: (id) => !isUpstashId(id),
   host: modalHost,
   create: (spec) => createJobSandbox(spec),
-  terminate: terminateSandbox,
+  // A Modal ref is a filesystem image, never the sandbox, so there is nothing to keep running.
+  terminate: (sandboxId) => terminateSandbox(sandboxId),
   listRunning: () => modal.api.list(config.factory.sandbox.appName, { label: config.factory.label }),
   hibernate: snapshotSandbox,
-  release: terminateSandbox,
   wake: (ref, spec) => createJobSandbox({ ...spec, imageId: ref }),
   afterWake: deleteSnapshot,
-  discard: deleteSnapshot,
+  discard: (ref) => deleteSnapshot(ref),
+  refsExpire: true,
   isGone: isModalGone,
   tunnel: tunnelUrl,
 };
@@ -61,14 +67,21 @@ export const modalBackend: SandboxBackend = {
 /** Upstash box labels hold at most 20 characters, so the machine is a short hash of its id. */
 const machineLabel = (machineId: string) => `m:${createHash("sha256").update(machineId).digest("hex").slice(0, 12)}`;
 const factoryLabel = () => `mf:${config.factory.label}`.slice(0, 20);
-/** Boxes stop only on a delete; the paused ones are hibernated jobs, which listRunning leaves out. */
-const LIVE_STATUSES = new Set(["creating", "idle", "running"]);
+/** A deleted box is gone; every other status is a box that still exists and costs storage, asleep or not. */
+const GONE_STATUS = "deleted";
+
+/** Runs a step on a box, treating a box Upstash no longer has as done. */
+async function onBox(id: string, step: (box: Awaited<ReturnType<typeof boxHandle>>) => Promise<unknown>) {
+  try {
+    await step(await boxHandle(id));
+  } catch (error) {
+    if (!isUpstashGone(error)) throw error;
+  }
+}
 
 async function deleteBox(id: string) {
   try {
-    await (await upstash.api.get(boxIdOf(id))).delete();
-  } catch (error) {
-    if (!isUpstashGone(error)) throw error;
+    await onBox(id, (box) => box.delete());
   } finally {
     forgetBox(id);
   }
@@ -76,8 +89,8 @@ async function deleteBox(id: string) {
 
 /**
  * Upstash Box. A box pauses with its disk and processes intact and resumes as the same box, so a
- * hibernated job's ref is its box itself: hibernate keeps the id, release pauses it, wake resumes
- * it. Repo secrets and warm repo images are Modal's only, for now.
+ * hibernated job's ref is its box itself: hibernate keeps the id, terminating with that ref kept
+ * pauses it, a wake resumes it. Repo secrets and warm repo images are Modal's only, for now.
  */
 export const upstashBackend: SandboxBackend = {
   kind: "upstash",
@@ -96,36 +109,36 @@ export const upstashBackend: SandboxBackend = {
     rememberBox(box);
     return { sandboxId: upstashId(box.id), host: upstashHost(upstashId(box.id)) };
   },
-  terminate: deleteBox,
+  async terminate(sandboxId, keep) {
+    if (keep === sandboxId) await onBox(sandboxId, (box) => box.pause());
+    else await deleteBox(sandboxId);
+  },
   async listRunning() {
     const machineId = (await thisMachine()).id;
     const me = machineLabel(machineId);
     return (await upstash.api.list(factoryLabel()))
-      .filter((b) => LIVE_STATUSES.has(b.status))
+      .filter((b) => b.status !== GONE_STATUS)
       .map((b) => {
         const label = b.labels.find((l) => l.startsWith("m:"));
-        return { sandboxId: upstashId(b.id), tags: { ...(label && { machine: label === me ? machineId : label }) } };
+        return { sandboxId: upstashId(b.id), tags: { status: b.status, ...(label && { machine: label === me ? machineId : label }) } };
       });
   },
   hibernate: async (sandboxId) => sandboxId,
-  async release(sandboxId) {
-    try {
-      await (await upstash.api.get(boxIdOf(sandboxId))).pause();
-    } catch (error) {
-      if (!isUpstashGone(error)) throw error;
-    }
-  },
   async wake(ref) {
-    const box = await upstash.api.get(boxIdOf(ref));
+    const box = await boxHandle(ref);
     await box.resume();
     rememberBox(box);
     return { sandboxId: ref, host: upstashHost(ref) };
   },
   afterWake: async () => {},
-  discard: deleteBox,
+  async discard(ref, holder) {
+    if (ref !== holder) await deleteBox(ref);
+  },
+  // A paused box lives until it is deleted.
+  refsExpire: false,
   isGone: isUpstashGone,
   async tunnel(sandboxId, port) {
-    return { kind: "url", url: (await (await upstash.api.get(boxIdOf(sandboxId))).getPublicURL(port)).url };
+    return { kind: "url", url: (await (await boxHandle(sandboxId)).getPublicURL(port)).url };
   },
 };
 
@@ -145,10 +158,13 @@ export function backendFor(execution: CloudExecution): SandboxBackend {
   return backend;
 }
 
-/** The ids every backend in use still runs, for capacity and the reap. A backend this runner has no token for is skipped. */
+/** The sandboxes every backend in use still has, for capacity and the reap. A backend this runner has no token for is skipped. */
 export async function runningSandboxes(): Promise<ListedSandbox[]> {
   return (await Promise.all(BACKENDS.filter((b) => backendInUse(b.kind)).map((b) => b.listRunning()))).flat();
 }
+
+/** Whether a listed sandbox is asleep: paused by the factory's hibernate, or by Upstash's own idle pause. */
+export const isAsleep = (listed: ListedSandbox) => listed.tags.status === "paused";
 
 /**
  * Upstash is reached only with its key; Modal keeps its old behaviour of always being listed. In a

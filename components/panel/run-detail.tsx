@@ -17,7 +17,7 @@ import { sourceLink } from "@/lib/sources/shapes";
 import { parseStop, stopLine, stopView } from "@/lib/stop";
 import { runFeedPath } from "@/lib/run-links";
 import { RUNS_ON_LABELS, ticketRecordSchema } from "@/lib/ticket-overrides";
-import { runsOn } from "./cards";
+import { runsOn, whereLine } from "./cards";
 import { AgentTree } from "./agent-tree";
 import { useArchiveAction, type ArchiveAction } from "./archive-action";
 import { EventFeed } from "./event-feed";
@@ -139,7 +139,7 @@ const STOP_BOX = {
 
 /** Where the job's stop is: what the runner last did, why it counts as stopped, or why it could not tell. */
 function StopBanner({ job, t3Href }: { job: JobRow; t3Href: string | null }) {
-  const sandboxed = runsOn(job)?.kind === "modal";
+  const sandboxed = runsOn(job)?.kind === "cloud";
   const view = stopView(job.stop, sandboxed);
   const stop = parseStop(job.stop);
   if (!view || !stop) return null;
@@ -215,7 +215,7 @@ export function RunDetail({
   const where = job && runsOn(job);
   const stopThread = job && (parseStop(job.stop)?.thread ?? job.t3_thread_id);
 
-  const place = machineName && (where?.kind === "modal" ? `Cloud sandbox via ${machineName}` : `Local · ${machineName}`);
+  const place = machineName && (where?.kind === "cloud" ? `${whereLine(where, machineName)} via ${machineName}` : `Local · ${machineName}`);
   const spend = jobSpend ? (
     <span title={`${jobSpend.attempt > 1 ? "Spend of this attempt" : "Spend"}, and its spend limit`}>
       {jobSpend.attempt > 1 && `attempt ${jobSpend.attempt} · `}

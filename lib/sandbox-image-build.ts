@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -8,7 +9,7 @@ import { z } from "zod";
 import { SANDBOX_IMAGE_PATH, type SandboxLimits } from "./config";
 import { imageDrift, rebuildText, type ImageVersions } from "./machine";
 import type { SandboxHandle } from "./modal-host";
-import { commandLine, PINNED_TOOLS_FIRST, shellQuote, upstash, upstashId, type UpstashBox } from "./upstash-host";
+import { commandLine, exitCodeOf, PINNED_TOOLS_FIRST, shellQuote, upstash, upstashId, type UpstashBox } from "./upstash-host";
 import {
   enabledPstack,
   FACTORY_ROOT,
@@ -127,7 +128,7 @@ const UPSTASH_LAYER_MS = 20 * 60_000;
 async function boxSh(box: UpstashBox, script: string, { root = false, timeoutMs = UPSTASH_LAYER_MS } = {}) {
   const run = root ? ["sudo", "-H", "env", `HOME=${UPSTASH_HOME}`, "bash", "-c", script] : ["bash", "-c", script];
   const result = await box.exec.command(commandLine(run[0]!, run.slice(1), { timeoutMs }));
-  const code = result.exitCode ?? (result.status === "completed" ? 0 : 1);
+  const code = exitCodeOf(result);
   if (code !== 0) throw new Error(`${script.slice(0, 200)} exited ${code}: ${result.stderr.trim().slice(-500)}`);
   return result.stdout;
 }
@@ -150,7 +151,15 @@ async function readySnapshot(box: UpstashBox, timeoutMs = 15 * 60_000) {
  */
 export const openUpstashBuildSandbox: OpenBuildSandbox = async (limits, log) => {
   forbidInTest("Upstash");
-  const box = await upstash.api.create({ name: `image-build-${Date.now()}`, labels: ["mf:image-build"], env: {} });
+  // The caller holds this machine's build lock, so a build box of this machine still there was left
+  // by a build that stopped mid-way (Ctrl-C skips its cleanup); it is ended rather than kept.
+  const machine = `b:${createHash("sha256").update(hostname()).digest("hex").slice(0, 12)}`;
+  for (const left of await upstash.api.list(machine)) {
+    if (left.status === "deleted") continue;
+    log(`ending build box ${left.id}, left by an earlier build`);
+    await (await upstash.api.get(left.id)).delete().catch((error: unknown) => log(`could not end ${left.id}: ${String(error)}`));
+  }
+  const box = await upstash.api.create({ name: `image-build-${Date.now()}`, labels: ["mf:image-build", machine], env: {} });
   try {
     log("building the Upstash base snapshot (the first build takes a few minutes)");
     for (const layer of baseLayers(limits, UPSTASH_HOME)) await boxSh(box, layer.replace(/^RUN /, ""), { root: true });
@@ -169,7 +178,7 @@ export const openUpstashBuildSandbox: OpenBuildSandbox = async (limits, log) => 
         stdin: { writeText: async () => {}, close: async () => {} },
         stdout: { readText: async () => result.stdout },
         stderr: { readText: async () => result.stderr },
-        wait: async () => result.exitCode ?? (result.status === "completed" ? 0 : 1),
+        wait: async () => exitCodeOf(result),
       };
     },
     filesystem: {

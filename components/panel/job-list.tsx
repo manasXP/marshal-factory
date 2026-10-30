@@ -55,7 +55,7 @@ function Row({
     : showsDecision(card)
       ? decisionLine(card.mergeDecision)
       : null;
-  const where = card.runsOn && (card.runsOn.kind === "modal" && card.runsOn.sandbox ? `Cloud sandbox · ${card.runsOn.sandbox}` : whereLine(card.runsOn, machineName));
+  const where = card.runsOn && (card.runsOn.kind === "cloud" && card.runsOn.sandbox ? `${whereLine(card.runsOn, machineName)} · ${card.runsOn.sandbox}` : whereLine(card.runsOn, machineName));
   const className = cn(
     "flex h-9 min-w-0 flex-1 items-center gap-3 ps-1 pe-4 text-left outline-none @3xl:pe-5",
     !href && "cursor-default",

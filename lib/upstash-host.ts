@@ -47,15 +47,21 @@ export type UpstashApi = {
 
 const asBox = (box: Box): UpstashBox => box as unknown as UpstashBox;
 
+/**
+ * Each SDK call is one HTTP request, which the SDK aborts after 10 minutes unless told otherwise. A
+ * command's own `timeout` (commandLine) is its deadline, so the request may last longer than any.
+ */
+const REQUEST_TIMEOUT_MS = 60 * 60_000;
+
 export const realUpstash: UpstashApi = {
   async create({ snapshotId, ...config }) {
     forbidInTest("Upstash");
-    const options = { runtime: "node" as const, ...config };
+    const options = { runtime: "node" as const, timeout: REQUEST_TIMEOUT_MS, ...config };
     return asBox(snapshotId ? await Box.fromSnapshot(snapshotId, options) : await Box.create(options));
   },
   async get(boxId) {
     forbidInTest("Upstash");
-    return asBox(await Box.get(boxId));
+    return asBox(await Box.get(boxId, { timeout: REQUEST_TIMEOUT_MS }));
   },
   async list(label) {
     forbidInTest("Upstash");
@@ -81,7 +87,8 @@ const gone = (id: string, error: unknown) => (isUpstashGone(error) ? new HostGon
 
 const handles = new Map<string, Promise<UpstashBox>>();
 
-async function handle(id: string) {
+/** The box behind a factory id, fetched once and reused. */
+export async function boxHandle(id: string) {
   let box = handles.get(id);
   if (!box) {
     box = upstash.api.get(boxIdOf(id));
@@ -121,6 +128,17 @@ export function commandLine(command: string, args: readonly string[], { cwd, tim
 
 const READ_CHUNK = 6 * 1024 * 1024;
 
+/** A finished command's exit code; the SDK leaves it out on some runs and says only whether it failed. */
+export const exitCodeOf = (result: BoxCommand) => result.exitCode ?? (result.status === "completed" ? 0 : 1);
+
+async function removeQuietly(id: string, path: string) {
+  try {
+    await (await boxHandle(id)).exec.command(`rm -f ${shellQuote(path)}`);
+  } catch {
+    // The box is gone or unreachable; whatever it held goes with it.
+  }
+}
+
 /**
  * A JobHost whose commands run in an Upstash box. `run` settles like the local host: it resolves
  * on a zero exit and rejects with an ExecError carrying the exit code, the output, and `killed` on a
@@ -130,9 +148,10 @@ export function upstashHost(id: string): JobHost {
   async function run(command: string, args: string[], { input, cwd, timeoutMs }: ExecOptions = {}) {
     const line = `${command} ${args.join(" ")}`;
     let result: BoxCommand;
+    let inputPath: string | undefined;
+    let ran = false;
     try {
-      const box = await handle(id);
-      let inputPath: string | undefined;
+      const box = await boxHandle(id);
       if (input !== undefined) {
         inputPath = `${EXEC_DIR}/${randomUUID()}`;
         await box.files.write({ path: inputPath, content: input });
@@ -146,10 +165,14 @@ export function upstashHost(id: string): JobHost {
         throw Object.assign(new Error(`Command timed out: ${line}`), { killed: true, stdout: "", stderr: "" } satisfies Partial<ExecError>);
       }
       result = settled;
+      ran = true;
     } catch (error) {
       throw gone(id, error);
+    } finally {
+      // The line removes its input file once it runs; one that never answered leaves it, and it may hold a token.
+      if (inputPath && !ran) void removeQuietly(id, inputPath);
     }
-    const code = result.exitCode ?? (result.status === "completed" ? 0 : 1);
+    const code = exitCodeOf(result);
     if (code === 0) return { stdout: result.stdout, stderr: result.stderr };
     const killed = timeoutMs !== undefined && TIMEOUT_EXITS.has(code);
     throw Object.assign(new Error(`Command failed: ${line}\n${result.stderr}`), { code, stdout: result.stdout, stderr: result.stderr, killed } satisfies Partial<ExecError>);
@@ -168,10 +191,11 @@ export function upstashHost(id: string): JobHost {
   return {
     t3: "t3",
     home: UPSTASH_HOME,
+    unprivileged: true,
     run,
     async readFile(path) {
       try {
-        const box = await handle(id);
+        const box = await boxHandle(id);
         // Base64 chunks, so a large file comes back byte for byte however its text splits.
         const chunks: Buffer[] = [];
         for (let offset = 0; ; offset += READ_CHUNK) {
@@ -188,7 +212,7 @@ export function upstashHost(id: string): JobHost {
     async writeFile(path, text) {
       try {
         // Upstash creates the parent directories.
-        await (await handle(id)).files.write({ path, content: text });
+        await (await boxHandle(id)).files.write({ path, content: text });
       } catch (error) {
         throw gone(id, error);
       }

@@ -3,7 +3,7 @@ import { auditLog, machines } from "../db/schema";
 import { CLOUD_EXECUTIONS, isCloud, type CloudExecution, type Execution } from "../lib/execution";
 import { harnessLabel, type Harness } from "../lib/harness";
 import { reportedHarnesses } from "../lib/machine";
-import { imageProblem, upstashImageProblem } from "../lib/sandbox";
+import { imageProblem } from "../lib/sandbox";
 import type { EffectiveHarness, HarnessChoice } from "../lib/settings";
 import { allSources, sourceFor } from "../lib/sources";
 import type { Job, JobSource, SourceAdapter } from "../lib/sources/types";
@@ -134,7 +134,7 @@ export function capabilities(): Omit<Capabilities, "checkout"> {
   const modal =
     imageProblem(sandboxRuntime.image(), limits) ?? (!sandboxRuntime.modalToken() ? "there is no cloud sandbox token" : null);
   const upstash =
-    upstashImageProblem(sandboxRuntime.upstashImage(), limits) ??
+    imageProblem(sandboxRuntime.upstashImage(), limits, "upstash") ??
     (!sandboxRuntime.upstashToken() ? "there is no Upstash Box API key" : null);
   return {
     local: overrideRuntime.localT3(),

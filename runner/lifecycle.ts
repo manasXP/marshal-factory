@@ -18,7 +18,7 @@ import { thisMachine } from "./heartbeat";
 import { flushSandboxOutbox } from "./outbox";
 import { isolated } from "./reconcile";
 import { CodexLoginError, installCodexLogin, markSlotUnusable, needsCodexSlot, pairT3, sandboxRuntime, startT3, stopT3, usableSlots, writeGithubToken } from "./sandbox";
-import { backendOf, runningSandboxes } from "./sandbox-backend";
+import { backendOf, isAsleep, runningSandboxes } from "./sandbox-backend";
 import { threads } from "./threads";
 import { verifyingKeys } from "./verify";
 
@@ -193,27 +193,17 @@ export async function writeBackLogin(key: string, sandboxId: string, slot: strin
   return "written";
 }
 
-/** Every end of a job's sandbox: undelivered reports and the login leave it first. */
-export async function retireSandbox(key: string, sandboxId: string, slot: string | null) {
-  await flushSandboxOutbox(key, backendOf(sandboxId).host(sandboxId));
-  await writeBackLogin(key, sandboxId, slot);
-  await backendOf(sandboxId).terminate(sandboxId);
-  tokenWrites.delete(sandboxId);
-}
-
 /**
- * A box that is its own hibernation ref (Upstash) is paused, never ended: ending it would end the
- * job's state with it. Its reports and login leave it first, as on any retire.
+ * Every end of a job's sandbox: undelivered reports and the login leave it first. `keep` is the
+ * job's hibernation ref, when it has one; the backend keeps it, so a sandbox that is its own ref
+ * (Upstash) goes to sleep instead of ending.
  */
-async function releaseSandbox(key: string, sandboxId: string, slot: string | null) {
+export async function retireSandbox(key: string, sandboxId: string, slot: string | null, keep: string | null = null) {
   await flushSandboxOutbox(key, backendOf(sandboxId).host(sandboxId));
   await writeBackLogin(key, sandboxId, slot);
-  await backendOf(sandboxId).release(sandboxId);
+  await backendOf(sandboxId).terminate(sandboxId, keep);
   tokenWrites.delete(sandboxId);
 }
-
-/** Whether a hibernation ref is the sandbox itself, which pauses in place, rather than a copy of it. */
-const refIsSandbox = (ref: string | null, sandboxId: string | null) => ref !== null && ref === sandboxId;
 
 /** A slot whose login Codex refused: skipped from now on, and the job's audit log says so. */
 export async function loginFailed(key: string, slot: string) {
@@ -294,15 +284,14 @@ export async function teardownFinished() {
   return each(rows, async (row) => (await teardownSandbox(row), "torn down"));
 }
 
-/** A hibernate or wake that a crash cut short: the snapshot is kept and the sandbox ends, or pauses when it is the snapshot. */
+/** A hibernate or wake that a crash cut short: the snapshot is kept and the sandbox ends (or sleeps, when it is the snapshot). */
 export async function settleInterrupted() {
   const rows = await db
     .select()
     .from(jobs)
     .where(and(await mine(), isNotNull(jobs.sandbox_id), isNotNull(jobs.sandbox_snapshot), notPending));
   return each(rows, async (row) => {
-    if (refIsSandbox(row.sandbox_snapshot, row.sandbox_id)) await releaseSandbox(row.key, row.sandbox_id!, row.codex_slot);
-    else await retireSandbox(row.key, row.sandbox_id!, row.codex_slot);
+    await retireSandbox(row.key, row.sandbox_id!, row.codex_slot, row.sandbox_snapshot);
     await db
       .update(jobs)
       .set({ sandbox_id: null, codex_slot: null })
@@ -362,11 +351,10 @@ export async function hibernateIdle(now = Date.now()) {
       .where(and(eq(jobs.key, row.key), eq(jobs.sandbox_id, sandboxId), isNull(jobs.sandbox_snapshot)))
       .returning({ key: jobs.key });
     if (!kept) {
-      // A ref that is the sandbox itself is the sandbox the job still holds.
-      if (!refIsSandbox(imageId, sandboxId)) await backend.discard(imageId);
+      await backend.discard(imageId, sandboxId);
       return undefined;
     }
-    await backend.release(sandboxId);
+    await backend.terminate(sandboxId, imageId);
     tokenWrites.delete(sandboxId);
     await db.update(jobs).set({ sandbox_id: null, codex_slot: null }).where(and(eq(jobs.key, row.key), eq(jobs.sandbox_id, sandboxId)));
     log("sandbox:hibernated", { key: row.key, sandbox: sandboxId, stage: row.stage });
@@ -439,8 +427,7 @@ async function wakeInRoom(row: JobRow, snapshot: string, asleep: SQL | undefined
     return created.host;
   } catch (error) {
     if (error instanceof CodexLoginError) await loginFailed(row.key, error.slot);
-    if (sandboxId && refIsSandbox(snapshot, sandboxId)) await releaseSandbox(row.key, sandboxId, slot);
-    else if (sandboxId) await retireSandbox(row.key, sandboxId, slot);
+    if (sandboxId) await retireSandbox(row.key, sandboxId, slot, snapshot);
     await db
       .update(jobs)
       .set({ sandbox_id: null, codex_slot: null })
@@ -506,25 +493,44 @@ export async function openT3(jobId: JobId): Promise<PairingResult> {
 const suspects = { sandboxes: new Set<string>(), slots: new Set<string>() };
 
 /**
- * Cleans up after crashes. A running sandbox of this runner's label (and machine, when tagged)
- * that no job points at is terminated; its login cannot go back, since no job names its slot. A
- * slot held by a job of this machine with no pending launch and no running sandbox is freed.
+ * Cleans up after crashes. A sandbox of this runner's label (and machine, when tagged), running or
+ * asleep, that no job points at is terminated; its login cannot go back, since no job names its slot.
+ * A slot held by a job of this machine with no pending launch and no sandbox is freed. A sandbox
+ * that is a hibernated job's ref is never ended: one that runs again (Upstash resumes a paused box
+ * on any request) is put back to sleep, and one older than snapshotTtlDays on a backend whose refs
+ * do not expire on their own is discarded, as Modal's snapshots expire, so the job reads as gone.
  */
-export async function reap() {
+export async function reap(now = Date.now()) {
   const machine = await thisMachine();
   const listed = await runningSandboxes();
   const running = new Set(listed.map((s) => s.sandboxId));
-  const ours = listed.filter((s) => !s.tags.machine || s.tags.machine === machine.id).map((s) => s.sandboxId);
-  const pointing = ours.length > 0 ? await db.select({ sandbox_id: jobs.sandbox_id, sandbox_snapshot: jobs.sandbox_snapshot }).from(jobs).where(or(inArray(jobs.sandbox_id, ours), inArray(jobs.sandbox_snapshot, ours))) : [];
+  const ours = listed.filter((s) => !s.tags.machine || s.tags.machine === machine.id);
+  const ids = ours.map((s) => s.sandboxId);
+  const pointing =
+    ids.length > 0
+      ? await db
+          .select({ key: jobs.key, sandbox_id: jobs.sandbox_id, sandbox_snapshot: jobs.sandbox_snapshot, stage_at: jobs.stage_at, updated_at: jobs.updated_at })
+          .from(jobs)
+          .where(or(inArray(jobs.sandbox_id, ids), inArray(jobs.sandbox_snapshot, ids)))
+      : [];
   const owned = new Set(pointing.map((r) => r.sandbox_id));
-  // A hibernated job's box that runs again (Upstash resumes a paused box on any request) is paused, never ended.
-  const asleep = new Set(pointing.flatMap((r) => (r.sandbox_snapshot && !r.sandbox_id ? [r.sandbox_snapshot] : [])));
+  const hibernated = new Map(pointing.flatMap((r) => (r.sandbox_snapshot && !r.sandbox_id ? [[r.sandbox_snapshot, r] as const] : [])));
+  const ttlMs = config.factory.sandbox.snapshotTtlDays * 86_400_000;
   const repaused: string[] = [];
-  for (const id of ours.filter((id) => asleep.has(id))) {
-    await backendOf(id).release(id);
-    repaused.push(id);
+  const expired: string[] = [];
+  for (const sandbox of ours) {
+    const job = hibernated.get(sandbox.sandboxId);
+    if (!job) continue;
+    const backend = backendOf(sandbox.sandboxId);
+    if (!backend.refsExpire && now - (job.stage_at ?? job.updated_at).getTime() > ttlMs) {
+      await backend.discard(sandbox.sandboxId);
+      expired.push(sandbox.sandboxId);
+    } else if (!isAsleep(sandbox)) {
+      await backend.terminate(sandbox.sandboxId, sandbox.sandboxId);
+      repaused.push(sandbox.sandboxId);
+    }
   }
-  const orphans = ours.filter((id) => !owned.has(id) && !asleep.has(id));
+  const orphans = ids.filter((id) => !owned.has(id) && !hibernated.has(id));
   const terminated: string[] = [];
   for (const id of orphans.filter((id) => suspects.sandboxes.has(id))) {
     await backendOf(id).terminate(id);
@@ -547,8 +553,8 @@ export async function reap() {
     if (cleared) freed.push(`${holder.key}:${holder.codex_slot}`);
   }
   suspects.slots = new Set(idle.map((h) => `${h.key}:${h.codex_slot}`).filter((id) => !freed.includes(id)));
-  if (terminated.length > 0 || freed.length > 0 || repaused.length > 0) log("sandbox:reaped", { terminated, freed, repaused });
-  return { terminated, freed, ...(repaused.length > 0 && { repaused }), suspects: suspects.sandboxes.size + suspects.slots.size };
+  if (terminated.length > 0 || freed.length > 0 || repaused.length > 0 || expired.length > 0) log("sandbox:reaped", { terminated, freed, repaused, expired });
+  return { terminated, freed, ...(repaused.length > 0 && { repaused }), ...(expired.length > 0 && { expired }), suspects: suspects.sandboxes.size + suspects.slots.size };
 }
 
 /** Whether this machine has anything in a cloud sandbox to look after, so a runner that never used one never calls a backend. */
@@ -562,7 +568,7 @@ let lastReap = 0;
 /** The timer's sandbox pass; each step on its own, so one failing does not skip the rest. */
 export async function tickSandboxes(now = Date.now()) {
   const reapDue = now - lastReap >= REAP_EVERY_MS && (await usesSandboxes());
-  const reaped = reapDue ? await isolated(reap) : undefined;
+  const reaped = reapDue ? await isolated(() => reap(now)) : undefined;
   if (reaped && !("error" in reaped)) lastReap = now;
   return {
     settled: await isolated(settleInterrupted),
