@@ -9,9 +9,12 @@ export const RECIPE_PATH = ".factory/setup.json";
 
 /**
  * Where a job's sandbox holds the recipe while it is only on the onboarding PR, so main, and the
- * job's worktree, have none; factory-verify reads it when the worktree has no RECIPE_PATH.
+ * job's worktree, have none; factory-verify reads it when the worktree has no RECIPE_PATH. It is
+ * under the sandbox's home, which the launcher and factory-verify (as $HOME) agree on.
  */
-export const UNMERGED_RECIPE_PATH = "/root/.config/marshal-factory/recipe.json";
+export const unmergedRecipePath = (home: string) => `${home}/.config/marshal-factory/recipe.json`;
+/** Modal's, whose sandboxes run as root. */
+export const UNMERGED_RECIPE_PATH = unmergedRecipePath("/root");
 
 /** Changes to these invalidate a warm image when the recipe names no warmKey of its own. */
 export const DEFAULT_WARM_KEY = [

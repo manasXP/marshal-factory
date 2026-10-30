@@ -10,6 +10,10 @@ import { forbidInTest } from "./test-mode";
 export type JobHost = {
   /** The T3 CLI on this host. */
   readonly t3: string;
+  /** A sandbox's home, where its tools keep their state (lib/sandbox.ts sandboxPaths); absent on this machine. */
+  readonly home?: string;
+  /** Commands run as a user that needs sudo to write outside its own directories (an Upstash box's boxuser). */
+  readonly unprivileged?: boolean;
   run(command: string, args: string[], options?: ExecOptions): Promise<{ stdout: string; stderr: string }>;
   /** The file's text, or null when it does not exist. */
   readFile(path: string): Promise<string | null>;

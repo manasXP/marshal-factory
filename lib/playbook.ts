@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import type { Execution } from "./execution";
+import { cloudOfSandbox, type Execution } from "./execution";
 import type { JobHost } from "./host";
 import { checkoutPlaybooks, SANDBOX_PLAYBOOKS } from "./sandbox";
 
@@ -13,6 +13,7 @@ export const REPO_PLAYBOOK = ".agents/playbooks/factory.md";
 export function factoryPlaybook(execution: Execution) {
   switch (execution) {
     case "modal":
+    case "upstash":
       return `${SANDBOX_PLAYBOOKS}/factory.md`;
     case "local":
       return join(checkoutPlaybooks(), "factory.md");
@@ -25,7 +26,7 @@ export function factoryPlaybook(execution: Execution) {
 
 /** Where a claimed job's thread runs: its recorded execution, else where its sandbox fields put it. */
 export const jobExecution = (job: { execution: Execution | null; sandbox_id: string | null; sandbox_snapshot: string | null }): Execution =>
-  job.execution ?? (job.sandbox_id || job.sandbox_snapshot ? "modal" : "local");
+  job.execution ?? (job.sandbox_id || job.sandbox_snapshot ? cloudOfSandbox((job.sandbox_id ?? job.sandbox_snapshot)!) : "local");
 
 /** Whether the repo's main has its own copy; any failure to tell counts as none. */
 export async function repoHasPlaybook(host: JobHost, checkout: string) {

@@ -1,6 +1,6 @@
 import { db } from "../db/client";
 import { auditLog, machines } from "../db/schema";
-import type { Execution } from "../lib/execution";
+import { CLOUD_EXECUTIONS, isCloud, type CloudExecution, type Execution } from "../lib/execution";
 import { harnessLabel, type Harness } from "../lib/harness";
 import { reportedHarnesses } from "../lib/machine";
 import { imageProblem } from "../lib/sandbox";
@@ -23,8 +23,8 @@ export type Capabilities = {
   local: boolean;
   /** This machine has a checkout of the job's repo; a local launch needs one. */
   checkout: boolean;
-  /** Why Modal cannot launch here; null when it can, even if every slot is busy right now. */
-  modal: string | null;
+  /** Why each cloud cannot launch here; null when it can, even if every slot is busy right now. */
+  cloud: Record<CloudExecution, string | null>;
   claude: boolean;
   /** A Codex login slot is usable; only a sandbox thread on Codex needs one. */
   codexSlot: boolean;
@@ -41,9 +41,11 @@ export type LaunchPlan =
  * ticket label beats the repo default, which beats Settings. The ticket's harness replaces the
  * default one with its first current model, since the lead agent fans out to other models itself;
  * the default model applies only to the default harness. A local launch needs this machine's T3 up
- * and a checkout of the repo. A ticket asking for Modal where it cannot launch runs locally if it
- * can, and one asking for Local where it cannot runs on Modal if Modal can launch; otherwise it
- * waits queued. Without a Runs on label, a repo with no checkout here runs on Modal, or waits.
+ * and a checkout of the repo. A ticket asking for a cloud that cannot launch here runs locally if
+ * it can, and one asking for Local where it cannot runs in a cloud that can launch; otherwise it
+ * waits queued. Without a Runs on label, a repo with no checkout here runs in a cloud, or waits.
+ * A job that falls to a cloud takes Settings' own cloud when that is one, else the first that can
+ * launch; it never moves from one cloud to another.
  */
 export function planLaunch(
   overrides: SourceOverrides,
@@ -63,25 +65,31 @@ export function planLaunch(
   }
 
   const inSandbox = sandboxHarness(harness, can.driverOf(harness.provider), can.claude, can.codexModel);
-  const modal = can.modal ?? (needsCodexSlot(inSandbox.choice.provider) && !can.codexSlot ? "no Codex login slot is usable" : null);
+  const slotProblem = needsCodexSlot(inSandbox.choice.provider) && !can.codexSlot ? "no Codex login slot is usable" : null;
+  const cloudProblem = (cloud: CloudExecution) => can.cloud[cloud] ?? slotProblem;
+  // Where a job that cannot run locally goes: Settings' own cloud first, then the rest in order.
+  const preferred = isCloud(settings.execution) ? [settings.execution, ...CLOUD_EXECUTIONS.filter((c) => c !== settings.execution)] : [...CLOUD_EXECUTIONS];
+  const fallback = preferred.find((cloud) => !cloudProblem(cloud));
+  const noFallback = cloudProblem(preferred[0]!);
   const noLocal = !can.local ? "this runner's T3 is not running" : !can.checkout ? "this runner has no checkout of the repo" : null;
   let execution = asked.execution ?? settings.execution;
-  if (asked.execution === "modal" && modal) {
-    if (noLocal) return { kind: "wait", reason: `Cloud sandboxes cannot launch on this runner (${modal}) and ${noLocal}` };
+  const askedProblem = asked.execution && isCloud(asked.execution) ? cloudProblem(asked.execution) : null;
+  if (askedProblem) {
+    if (noLocal) return { kind: "wait", reason: `Cloud sandboxes cannot launch on this runner (${askedProblem}) and ${noLocal}` };
     execution = "local";
-    notes.push(`Cloud sandboxes cannot launch on this runner (${modal}), so it runs locally.`);
+    notes.push(`Cloud sandboxes cannot launch on this runner (${askedProblem}), so it runs locally.`);
   }
   if (asked.execution === "local" && noLocal) {
-    if (modal) return { kind: "wait", reason: `${noLocal} and cloud sandboxes cannot launch here (${modal})` };
-    execution = "modal";
+    if (!fallback) return { kind: "wait", reason: `${noLocal} and cloud sandboxes cannot launch here (${noFallback})` };
+    execution = fallback;
     notes.push(`${noLocal[0]!.toUpperCase()}${noLocal.slice(1)}, so it runs in a cloud sandbox.`);
   }
   // A job only Settings or its repo send to local still needs the checkout; a down T3 fails its start as before.
   if (!asked.execution && execution === "local" && !can.checkout) {
-    if (modal) return { kind: "wait", reason: `this runner has no checkout of the repo and cloud sandboxes cannot launch here (${modal})` };
-    execution = "modal";
+    if (!fallback) return { kind: "wait", reason: `this runner has no checkout of the repo and cloud sandboxes cannot launch here (${noFallback})` };
+    execution = fallback;
   }
-  if (execution === "modal" && (asked.provider || asked.execution)) {
+  if (isCloud(execution) && (asked.provider || asked.execution)) {
     if (inSandbox.fallback) notes.push(`In a cloud sandbox, ${inSandbox.fallback}.`);
   }
 
@@ -94,11 +102,12 @@ export function planLaunch(
 }
 
 export function splitByExecution<T extends { execution: Execution }>(planned: readonly T[]) {
-  const split: Record<Execution, T[]> = { local: [], modal: [] };
+  const split: Record<Execution, T[]> = { local: [], modal: [], upstash: [] };
   for (const entry of planned) {
     switch (entry.execution) {
       case "local":
       case "modal":
+      case "upstash":
         split[entry.execution].push(entry);
         break;
       default: {
@@ -124,9 +133,12 @@ export function capabilities(): Omit<Capabilities, "checkout"> {
   const limits = config.factory.sandbox;
   const modal =
     imageProblem(sandboxRuntime.image(), limits) ?? (!sandboxRuntime.modalToken() ? "there is no cloud sandbox token" : null);
+  const upstash =
+    imageProblem(sandboxRuntime.upstashImage(), limits, "upstash") ??
+    (!sandboxRuntime.upstashToken() ? "there is no Upstash Box API key" : null);
   return {
     local: overrideRuntime.localT3(),
-    modal,
+    cloud: { modal, upstash },
     claude: Boolean(sandboxRuntime.claudeToken()),
     codexSlot: usableSlots(limits).length > 0,
     driverOf: sandboxRuntime.driverOf,

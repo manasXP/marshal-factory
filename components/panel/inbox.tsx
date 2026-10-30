@@ -17,6 +17,7 @@ import { stopLine, stopView } from "@/lib/stop";
 import { AUTONOMY_LABELS, type ReviewSummary } from "@/lib/merge-decision";
 import { sourceLink } from "@/lib/sources/shapes";
 import { cn } from "@/lib/utils";
+import { isCloud } from "@/lib/execution";
 import type { BoardCard } from "./cards";
 import { Screenshots } from "./screenshots";
 import { EvidenceSummaryList } from "./evidence";
@@ -97,7 +98,7 @@ function Why({ item }: { item: Item }) {
     case "question":
       return <p className="whitespace-pre-wrap">{job.question ?? job.stage_summary}</p>;
     case "failed": {
-      const stop = stopView(job.stop, job.execution === "modal");
+      const stop = stopView(job.stop, isCloud(job.execution));
       return (
         <div className="flex flex-col gap-1">
           <p className="whitespace-pre-wrap">{job.stage_summary ?? "The job failed without a summary."}</p>

@@ -1,13 +1,14 @@
 import { createHash } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import { eventSchema, type FactoryEvent } from "../lib/events";
 import { combined, CHECK_TIMEOUT_MS, formatDuration, OUTPUT_KEEP_CHARS, planChecks, runChecks, SECRET_ENV, shortSha, type CheckRunner, type EvidenceCheck } from "../lib/evidence";
 import { parseBranch } from "../lib/factory";
 import { readIngestTarget, reportEvents } from "../lib/outbox";
-import { parseRecipe, RECIPE_PATH, UNMERGED_RECIPE_PATH } from "../lib/recipe";
+import { parseRecipe, RECIPE_PATH, unmergedRecipePath } from "../lib/recipe";
 import { mcpIdentity } from "../lib/report-identity";
 
 // factory-verify: runs the repo's checks at the current HEAD and reports what ran as evidence for
@@ -66,9 +67,10 @@ async function repoOf(top: string) {
 
 /** The worktree's recipe, else the one the launcher left in the sandbox while it is only on the onboarding PR. */
 function readRecipe(top: string) {
-  const path = [join(top, RECIPE_PATH), UNMERGED_RECIPE_PATH].find((p) => existsSync(p));
+  const unmerged = unmergedRecipePath(homedir());
+  const path = [join(top, RECIPE_PATH), unmerged].find((p) => existsSync(p));
   if (!path) return null;
-  if (path === UNMERGED_RECIPE_PATH) say(`the worktree has no ${RECIPE_PATH}; using the recipe from the onboarding PR`);
+  if (path === unmerged) say(`the worktree has no ${RECIPE_PATH}; using the recipe from the onboarding PR`);
   const parsed = parseRecipe(readFileSync(path, "utf8"));
   if (parsed.ok) return parsed.recipe;
   say(`${parsed.error} Falling back to package.json scripts.`);

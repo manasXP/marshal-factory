@@ -12,7 +12,7 @@ import { sandboxRuntime } from "./sandbox";
 const LOCAL_BUDGET_MS = 30_000;
 const SANDBOX_BUDGET_MS = 60_000;
 
-/** The outbox state dir inside every job sandbox; the hooks and the MCP server run there as root. */
+/** The outbox state dir inside a Modal sandbox, where the hooks and the MCP server run as root; a host's own home names it elsewhere. */
 export const SANDBOX_STATE_DIR = stateDir(SANDBOX_HOME, {});
 
 /** How the runner posts an outbox; regressions swap `send` for the ingest projection. */
@@ -50,4 +50,4 @@ export async function flushLocalOutbox() {
 }
 
 /** A job sandbox's outbox, read and cleared through its host; a sandbox already gone is logged and skipped. */
-export const flushSandboxOutbox = (key: string, host: JobHost) => flush(host, SANDBOX_STATE_DIR, SANDBOX_BUDGET_MS, { where: "sandbox", key });
+export const flushSandboxOutbox = (key: string, host: JobHost) => flush(host, host.home ? stateDir(host.home, {}) : SANDBOX_STATE_DIR, SANDBOX_BUDGET_MS, { where: "sandbox", key });

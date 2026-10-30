@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import type { MachineRow, NotificationSettingsRow, SettingsRow } from "@/db/schema";
-import { DEFAULT_EXECUTION, EXECUTIONS, type Execution } from "@/lib/execution";
+import { DEFAULT_EXECUTION, EXECUTIONS, isCloud, type CloudExecution, type Execution } from "@/lib/execution";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER, harnessLabel, trackingOf, type Harness, type Tracking } from "@/lib/harness";
 import { componentName, IMAGE_COMPONENTS, rebuildText, reportedDrift, reportedHarnesses, reportedSandbox, reportedSlack, sandboxLogin, type SandboxReadiness } from "@/lib/machine";
 import { DEFAULT_SPEND_LIMIT_USD } from "@/lib/spend-limit";
@@ -53,7 +53,7 @@ function UntrackedWarning({ name, tracking }: { name: string; tracking: Exclude<
   );
 }
 
-const EXECUTION_LABELS: Record<Execution, string> = { local: "This Mac", modal: "Cloud" };
+const EXECUTION_LABELS: Record<Execution, string> = { local: "This Mac", modal: "Cloud (Modal)", upstash: "Cloud (Upstash Box)" };
 
 type Check = { tone: "ok" | "warn" | "missing"; label: ReactNode; howTo?: ReactNode };
 
@@ -102,7 +102,50 @@ function imageRebuild(build: SandboxReadiness["imageBuild"], drift: string, buil
   return { tone: "missing", label: drift, howTo: <>The runner starts the rebuild on its next tick; to build by hand, {buildImage}</> };
 }
 
-function sandboxChecks(readiness: SandboxReadiness): Check[] {
+function sandboxChecks(readiness: SandboxReadiness, cloud: CloudExecution): Check[] {
+  if (cloud === "upstash") return [...upstashChecks(readiness), ...loginChecks(readiness)];
+  return [...modalChecks(readiness), ...loginChecks(readiness)];
+}
+
+/** Upstash Box's key and base snapshot. The runner never rebuilds the snapshot on its own. */
+function upstashChecks(readiness: SandboxReadiness): Check[] {
+  const info = readiness.upstashImageInfo ?? null;
+  const drift = reportedDrift({ ...readiness, imageInfo: info });
+  const build = (
+    <>
+      run <Cmd>bun scripts/sandbox-image.ts --backend upstash</Cmd> on the runner Mac.
+    </>
+  );
+  return [
+    readiness.upstash
+      ? { tone: "ok", label: "Upstash Box API key present" }
+      : {
+          tone: "missing",
+          label: "No Upstash Box API key on the runner",
+          howTo: (
+            <>
+              Create a key in the Upstash Console, add it as <Cmd>UPSTASH_BOX_API_KEY</Cmd> to the runner checkout&apos;s <Cmd>.env.local</Cmd> and restart the
+              runner.
+            </>
+          ),
+        },
+    !info
+      ? { tone: "missing", label: "No Upstash base snapshot built", howTo: <>For the first build, {build}</> }
+      : drift.length > 0
+        ? { tone: "missing", label: rebuildText(drift, "the Upstash base snapshot"), howTo: <>To rebuild, {build}</> }
+        : {
+            tone: "ok",
+            label: (
+              <>
+                Upstash base snapshot built <When date={new Date(info.builtAt)} />
+                <span className="text-muted-foreground"> · {imageSummary(info)}</span>
+              </>
+            ),
+          },
+  ];
+}
+
+function modalChecks(readiness: SandboxReadiness): Check[] {
   const { imageInfo } = readiness;
   const drift = reportedDrift(readiness);
   const buildImage = (
@@ -110,7 +153,6 @@ function sandboxChecks(readiness: SandboxReadiness): Check[] {
       run <Cmd>bun scripts/sandbox-image.ts</Cmd> on the runner Mac.
     </>
   );
-  const unusable = readiness.codexSlotsUnusable ?? 0;
   return [
     readiness.modal
       ? { tone: "ok", label: "Cloud sandbox token present" }
@@ -141,6 +183,13 @@ function sandboxChecks(readiness: SandboxReadiness): Check[] {
               "Sandbox image built"
             ),
           },
+  ];
+}
+
+/** The logins every cloud's jobs run with. */
+function loginChecks(readiness: SandboxReadiness): Check[] {
+  const unusable = readiness.codexSlotsUnusable ?? 0;
+  return [
     readiness.claude
       ? { tone: "ok", label: "Claude token present" }
       : {
@@ -169,7 +218,7 @@ function sandboxChecks(readiness: SandboxReadiness): Check[] {
 }
 
 /** What the runner reports about its Modal setup: booleans, counts and the image's version, never a credential. */
-function SandboxReadinessList({ readiness }: { readiness: SandboxReadiness | null }) {
+function SandboxReadinessList({ readiness, cloud }: { readiness: SandboxReadiness | null; cloud: CloudExecution }) {
   if (!readiness) {
     return (
       <div role="note" className="flex gap-2.5 rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm">
@@ -178,7 +227,7 @@ function SandboxReadinessList({ readiness }: { readiness: SandboxReadiness | nul
       </div>
     );
   }
-  const checks = sandboxChecks(readiness);
+  const checks = sandboxChecks(readiness, cloud);
   const blocked = checks.some((c) => c.tone === "missing");
   return (
     <div className="flex flex-col gap-3 rounded-lg border p-3 text-sm">
@@ -383,7 +432,7 @@ export function SettingsForm({ machines, saved, notifications }: { machines: Fee
                       </Select>
                       <FieldDescription>Cloud runs each job in its own cloud sandbox; this Mac runs it in the runner&apos;s T3.</FieldDescription>
                     </Field>
-                    {execution === "modal" && <SandboxReadinessList readiness={readiness} />}
+                    {isCloud(execution) && <SandboxReadinessList readiness={readiness} cloud={execution} />}
                     <Field className="sm:max-w-[calc(50%-0.625rem)]">
                       <FieldLabel htmlFor="settings-spend-limit">Spend limit per attempt (USD)</FieldLabel>
                       <Input

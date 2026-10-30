@@ -3,7 +3,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
-import { CONFIG_PATH, SANDBOX_IMAGE_PATH, type SandboxLimits } from "./config";
+import { CONFIG_PATH, SANDBOX_IMAGE_PATH, UPSTASH_IMAGE_PATH, type SandboxLimits } from "./config";
 import { imageDrift, imageVersionsSchema, rebuildText, type ImageComponent, type ImageVersions, type SandboxReadiness } from "./machine";
 import { SCREENSHOT_DIR } from "./screenshots";
 
@@ -20,6 +20,20 @@ export const T3_USERDATA = `${SANDBOX_HOME}/.t3/userdata`;
 export const CODEX_HOME = `${SANDBOX_HOME}/.codex`;
 export const CODEX_AUTH = `${CODEX_HOME}/auth.json`;
 export const T3_PORT = 3773;
+
+/** An Upstash box's home. Its /root is a noexec tmpfs, emptied at every container start, so the tools live here instead. */
+export const UPSTASH_HOME = "/home/boxuser";
+
+/** The paths under a sandbox's home: root's in Modal, boxuser's in Upstash. The constants above are Modal's. */
+export const sandboxPaths = (home: string = SANDBOX_HOME) => ({
+  home,
+  githubToken: `${home}/.config/marshal-factory/github-token`,
+  ingestConfig: `${home}/.config/marshal-factory/config.json`,
+  t3Userdata: `${home}/.t3/userdata`,
+  codexHome: `${home}/.codex`,
+  codexAuth: `${home}/.codex/auth.json`,
+});
+export const pathsOf = (host: { home?: string }) => sandboxPaths(host.home);
 
 /**
  * Headless browser for the agent. The output dir sits outside REPO_DIR so screenshots never land in its worktree.
@@ -142,11 +156,20 @@ export function readSandboxImage(path = SANDBOX_IMAGE_PATH): SandboxImage | null
 /** How an outdated image gets rebuilt: runner/base-image.ts does it on the tick. */
 export const REBUILDS_ITSELF = "the runner rebuilds it on its tick, or run bun scripts/sandbox-image.ts";
 
-/** Why this image cannot launch jobs under these limits, or undefined when it can. */
-export function imageProblem(image: SandboxImage | null, limits: Pins) {
-  if (!image) return "no sandbox image is built; run bun scripts/sandbox-image.ts";
+/** The command that builds the Upstash base snapshot; the runner does not rebuild it on its own. */
+export const UPSTASH_IMAGE_BUILD = "bun scripts/sandbox-image.ts --backend upstash";
+
+const IMAGE_WORDING = {
+  modal: { missing: "no sandbox image is built; run bun scripts/sandbox-image.ts", what: "the sandbox image", rebuild: REBUILDS_ITSELF },
+  upstash: { missing: `no Upstash base snapshot is built; run ${UPSTASH_IMAGE_BUILD}`, what: "the Upstash base snapshot", rebuild: `run ${UPSTASH_IMAGE_BUILD}` },
+} as const;
+
+/** Why this cloud's image cannot launch jobs under these limits, or undefined when it can. */
+export function imageProblem(image: SandboxImage | null, limits: Pins, cloud: keyof typeof IMAGE_WORDING = "modal") {
+  const wording = IMAGE_WORDING[cloud];
+  if (!image) return wording.missing;
   const drift = imageDrift(builtVersions(image), pinnedVersions(limits));
-  return drift.length > 0 ? `${rebuildText(drift)}; ${REBUILDS_ITSELF}` : undefined;
+  return drift.length > 0 ? `${rebuildText(drift, wording.what)}; ${wording.rebuild}` : undefined;
 }
 
 export const slotAuthPath = (slot: string) => join(slot, "auth.json");
@@ -190,6 +213,7 @@ export function sandboxReadiness(
   env: NodeJS.ProcessEnv = process.env,
   health = readSlotHealth(),
   image = readSandboxImage(),
+  upstashImage = readSandboxImage(UPSTASH_IMAGE_PATH),
 ): SandboxReadiness {
   const loggedIn = limits.codexSlots.filter((slot) => existsSync(slotAuthPath(slot)));
   const unusable = loggedIn.filter((slot) => slotUnusable(health, slot, slotAuthMtime(slot))).length;
@@ -205,5 +229,9 @@ export function sandboxReadiness(
     ...(limits.t3Version && { pinnedT3Version: limits.t3Version }),
     ...(t3Version && claudeCodeVersion && codexVersion && playwrightMcpVersion && pstack && { pinnedVersions: pinnedVersions({ t3Version, claudeCodeVersion, codexVersion, playwrightMcpVersion, pstack }) }),
     ...(limits.maxParallel && { maxParallel: limits.maxParallel }),
+    ...((env.UPSTASH_BOX_API_KEY || upstashImage) && {
+      upstash: Boolean(env.UPSTASH_BOX_API_KEY),
+      upstashImageInfo: upstashImage && { t3Version: upstashImage.t3Version, builtAt: upstashImage.builtAt, factoryCommit: upstashImage.factoryCommit, versions: builtVersions(upstashImage) },
+    }),
   };
 }

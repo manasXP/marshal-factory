@@ -6,7 +6,7 @@ import { agents, runs, type RunRow } from "../db/schema";
 import { codexUsage, readRollouts, ROLLOUT_SLACK_MS } from "../lib/codex-usage";
 import type { Usage } from "../lib/events";
 import { HostAsleepError, HostGoneError, localHost, type JobHost } from "../lib/host";
-import { CODEX_HOME } from "../lib/sandbox";
+import { pathsOf } from "../lib/sandbox";
 import { postEvent } from "./ingest-client";
 
 // Codex has no hooks, so its usage is read from its rollout files on the job's host (see
@@ -15,7 +15,7 @@ import { postEvent } from "./ingest-client";
 // greatest totals, so a replay or an older read never lowers them.
 
 /** Where Codex writes its sessions on the host: the sandbox's CODEX_HOME, or this machine's. */
-export const codexHomeOf = (host: JobHost) => (host === localHost ? (process.env.CODEX_HOME ?? join(homedir(), ".codex")) : CODEX_HOME);
+export const codexHomeOf = (host: JobHost) => (host === localHost ? (process.env.CODEX_HOME ?? join(homedir(), ".codex")) : pathsOf(host).codexHome);
 
 type Row = Pick<RunRow, "input_tokens" | "output_tokens" | "cache_read_tokens" | "cache_write_tokens" | "model">;
 const lags = (u: Usage, row: Row | undefined) =>

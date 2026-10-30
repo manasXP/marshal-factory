@@ -279,6 +279,10 @@ For Claude Code jobs, run `claude setup-token`, add the token as `CLAUDE_CODE_OA
 
 Then set **Run jobs on** to Modal in the panel's Settings, which shows anything still missing. A job waiting for review or an answer hibernates to a snapshot after five minutes and wakes when it is needed, so it does not pay for a running sandbox while it waits. Claude Code and Codex jobs show stages and cost; other harnesses show neither. The runner rebuilds the image itself when a pin or a playbook changes; rebuild it by hand (`bun scripts/sandbox-image.ts`) when you change the hooks or the MCP server. [docs/operations.md](docs/operations.md#running-jobs-in-modal-sandboxes) has the details, including opening a sandboxed job in T3.
 
+## Running jobs in Upstash Box
+
+Upstash Box is a second cloud for jobs, beside Modal. Add `UPSTASH_BOX_API_KEY=<key>` (from the Upstash Console) to `.env.local` in the live checkout, build the base snapshot with `bun scripts/sandbox-image.ts --backend upstash`, and restart the runner. Then pick **Cloud (Upstash Box)** for **Run jobs on** in Settings, or give one issue the `Runs on / Upstash` label. A waiting job's box pauses instead of being snapshotted, and resumes when it is needed. Repo secrets and warm repo images are Modal's only for now, and the runner does not rebuild the Upstash snapshot on its own. [docs/operations.md](docs/operations.md#running-jobs-in-upstash-box) has the details.
+
 ## Connecting Slack
 
 Optional. With Slack connected, the runner messages you when a job needs you or the factory merges or reverts on its own, and edits the message once it's resolved. The messages carry the Inbox's buttons (**Approve and merge**, **Request changes**, **Answer**, **Close**, **Dismiss**), and `/factory` or the **Send to factory** message shortcut files new jobs. Only your own Slack account can act.

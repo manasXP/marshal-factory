@@ -1,7 +1,7 @@
 import type { JobRow, MachineRow, RunRow } from "@/db/schema";
 import { splitArchived } from "@/lib/archive";
 import type { Stage } from "@/lib/events";
-import { sandboxState, type SandboxState } from "@/lib/execution";
+import { cloudOfSandbox, isCloud, sandboxState, type CloudExecution, type SandboxState } from "@/lib/execution";
 import { evidenceLine, parseSummary, type EvidenceLine } from "@/lib/evidence";
 import { attemptBranch, isMcpSession } from "@/lib/factory";
 import { harnessLabel, isTracked, type Harness, type Tracking } from "@/lib/harness";
@@ -59,18 +59,23 @@ export function t3EnvironmentId(machine: Pick<MachineRow, "inventory"> | undefin
 /** What the card can show of the harness's run: a Codex job whose report server posted has stages, and its cost once the runner read a priced usage. */
 export type CardHarness = { name: string; tracking: Tracking };
 
-export type RunsOn = { kind: "modal"; sandbox: SandboxState | null } | { kind: "local"; machineId: string };
+export type RunsOn = { kind: "cloud"; cloud: CloudExecution; sandbox: SandboxState | null } | { kind: "local"; machineId: string };
+
+const CLOUD_LABELS: Record<CloudExecution, string> = { modal: "Cloud sandbox", upstash: "Upstash Box" };
 
 export function runsOn(job: Pick<JobRow, "execution" | "machine_id" | "sandbox_id" | "sandbox_snapshot">): RunsOn | null {
   const sandbox = sandboxState(job);
-  if (job.execution === "modal" || sandbox) return { kind: "modal", sandbox };
+  const id = job.sandbox_id ?? job.sandbox_snapshot;
+  // A launch records its execution; a sandbox whose job predates that names its cloud by its id.
+  const cloud = isCloud(job.execution) ? job.execution : id ? cloudOfSandbox(id) : null;
+  if (cloud) return { kind: "cloud", cloud, sandbox };
   return job.machine_id ? { kind: "local", machineId: job.machine_id } : null;
 }
 
 export function whereLine(where: RunsOn, machineName: string | null) {
   switch (where.kind) {
-    case "modal":
-      return "Cloud sandbox";
+    case "cloud":
+      return CLOUD_LABELS[where.cloud];
     case "local":
       return `Local · ${machineName ?? where.machineId}`;
     default: {
@@ -114,7 +119,7 @@ export function jobEvidenceLine(job: Pick<JobRow, "evidence" | "attempt" | "stag
 const stagedAt = (run: RunRow) => run.stage_at?.getTime() ?? 0;
 
 function cardStop(job: JobRow): BoardCard["stop"] {
-  const view = stopView(job.stop, runsOn(job)?.kind === "modal");
+  const view = stopView(job.stop, runsOn(job)?.kind === "cloud");
   return view && { view, thread: parseStop(job.stop)?.thread ?? job.t3_thread_id };
 }
 

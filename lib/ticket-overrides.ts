@@ -9,9 +9,9 @@ import type { Harness } from "./harness";
 export const OVERRIDE_GROUPS = { harness: "Harness", runsOn: "Runs on", repository: "Repository" } as const;
 export const HARNESS_GROUP = OVERRIDE_GROUPS.harness;
 export const RUNS_ON_GROUP = OVERRIDE_GROUPS.runsOn;
-export const RUNS_ON_LABELS: Record<Execution, string> = { local: "Local", modal: "Cloud" };
+export const RUNS_ON_LABELS: Record<Execution, string> = { local: "Local", modal: "Cloud", upstash: "Upstash" };
 /** Older Runs on label names tickets may still carry. */
-const RUNS_ON_ALIASES: Record<Execution, readonly string[]> = { local: [], modal: ["Modal"] };
+const RUNS_ON_ALIASES: Record<Execution, readonly string[]> = { local: [], modal: ["Modal"], upstash: ["Upstash Box"] };
 
 /** What a ticket asks for, field by field, by the names it shows; more than one value in a field is a conflict. */
 export type SourceOverrides = { [F in keyof typeof OVERRIDE_GROUPS]: string[] };
