@@ -2,6 +2,7 @@ import { ConflictError, ModalClient, NotFoundError, SandboxFilesystemNotFoundErr
 import type { SandboxLimits } from "./config";
 import type { ExecError, ExecOptions } from "./exec";
 import { HostGoneError, type JobHost } from "./host";
+import { SANDBOX_HOME } from "./sandbox";
 import { forbidInTest } from "./test-mode";
 
 // Runner only. The slice of the Modal SDK the factory uses, so regressions can hand in a fake.
@@ -256,6 +257,7 @@ export function modalHost(sandboxId: string): JobHost {
 
   return {
     t3: "t3",
+    home: SANDBOX_HOME,
     run,
     async readFile(path) {
       try {

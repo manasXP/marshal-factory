@@ -8,10 +8,10 @@ import { z } from "zod";
 import { SANDBOX_IMAGE_PATH, type SandboxLimits } from "./config";
 import { imageDrift, rebuildText, type ImageVersions } from "./machine";
 import type { SandboxHandle } from "./modal-host";
+import { commandLine, PINNED_TOOLS_FIRST, shellQuote, upstash, upstashId, type UpstashBox } from "./upstash-host";
 import {
   enabledPstack,
   FACTORY_ROOT,
-  GITHUB_TOKEN_PATH,
   IMAGE_BUNDLES,
   installPlaybooks,
   parseVersion,
@@ -20,7 +20,11 @@ import {
   PSTACK_DIR,
   PSTACK_PLUGIN,
   pstackVersion,
+  REPO_DIR,
+  SANDBOX_HOME,
   SANDBOX_PLAYBOOKS,
+  sandboxPaths,
+  UPSTASH_HOME,
   type SandboxImage,
 } from "./sandbox";
 import { forbidInTest } from "./test-mode";
@@ -42,14 +46,14 @@ const ROOT = join(import.meta.dirname, "..");
 const b64 = (text: string) => Buffer.from(text).toString("base64");
 const install = (path: string, text: string) => `RUN echo ${b64(text)} | base64 -d > ${path} && chmod 755 ${path}`;
 
-// The job's GitHub token lives in one file, so a refresh is a rewrite; git and gh both read it per call.
-const credentialHelper = `#!/bin/sh
+// The job's GitHub token lives in one file under the sandbox's home, so a refresh is a rewrite; git and gh both read it per call.
+const credentialHelper = (tokenPath: string) => `#!/bin/sh
 test "$1" = get || exit 0
 echo username=x-access-token
-echo "password=$(cat ${GITHUB_TOKEN_PATH})"
+echo "password=$(cat ${tokenPath})"
 `;
-const ghWrapper = `#!/bin/sh
-GH_TOKEN="$(cat ${GITHUB_TOKEN_PATH} 2>/dev/null)" exec /usr/bin/gh "$@"
+const ghWrapper = (tokenPath: string) => `#!/bin/sh
+GH_TOKEN="$(cat ${tokenPath} 2>/dev/null)" exec /usr/bin/gh "$@"
 `;
 const verifyWrapper = `#!/bin/sh
 exec bun ${FACTORY_ROOT}/hooks/verify.ts "$@"
@@ -60,8 +64,8 @@ type Log = (message: string) => void;
 /** Starts the build sandbox from the base layers; regressions pass a fake one. */
 export type OpenBuildSandbox = (limits: BuildLimits, log: Log) => Promise<SandboxHandle>;
 
-/** The Dockerfile commands for the base layers, at the pinned versions. */
-export const baseLayers = (limits: BuildLimits) => [
+/** The Dockerfile commands for the base layers, at the pinned versions, for a sandbox whose home is `home`. */
+export const baseLayers = (limits: BuildLimits, home = SANDBOX_HOME) => [
   "RUN apt-get update && apt-get install -y --no-install-recommends git curl ca-certificates procps unzip && rm -rf /var/lib/apt/lists/*",
   "RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /usr/share/keyrings/githubcli-archive-keyring.gpg" +
     ' && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list' +
@@ -76,8 +80,8 @@ export const baseLayers = (limits: BuildLimits) => [
     ` && git -C ${PSTACK_DIR} checkout -q FETCH_HEAD` +
     ` && claude plugin marketplace add ${PSTACK_DIR} && claude plugin install ${PSTACK_PLUGIN}` +
     ` && codex plugin marketplace add ${PSTACK_DIR} && codex plugin add ${PSTACK_PLUGIN}`,
-  install("/usr/local/bin/git-credential-factory", credentialHelper),
-  install("/usr/local/bin/gh", ghWrapper),
+  install("/usr/local/bin/git-credential-factory", credentialHelper(sandboxPaths(home).githubToken)),
+  install("/usr/local/bin/gh", ghWrapper(sandboxPaths(home).githubToken)),
   install("/usr/local/bin/factory-verify", verifyWrapper),
   "RUN git config --global user.name marshal-factory && git config --global user.email marshal-factory@users.noreply.github.com" +
     " && git config --global credential.https://github.com.helper factory && git config --global init.defaultBranch main",
@@ -111,6 +115,71 @@ export const openModalBuildSandbox: OpenBuildSandbox = async (limits, log) => {
     modal.close();
     throw error;
   }
+};
+
+/** An Upstash box's persistent volume, which ~/.claude and ~/.codex link into. */
+const UPSTASH_WORKSPACE = "/workspace/home";
+
+/** How long a base layer may take in a box; Chromium with its OS libraries is the slowest. */
+const UPSTASH_LAYER_MS = 20 * 60_000;
+
+/** A finished command in a box, or a throw that names the step; `root` runs it as root with boxuser's home, as Modal's layers run as root in theirs. */
+async function boxSh(box: UpstashBox, script: string, { root = false, timeoutMs = UPSTASH_LAYER_MS } = {}) {
+  const run = root ? ["sudo", "-H", "env", `HOME=${UPSTASH_HOME}`, "bash", "-c", script] : ["bash", "-c", script];
+  const result = await box.exec.command(commandLine(run[0]!, run.slice(1), { timeoutMs }));
+  const code = result.exitCode ?? (result.status === "completed" ? 0 : 1);
+  if (code !== 0) throw new Error(`${script.slice(0, 200)} exited ${code}: ${result.stderr.trim().slice(-500)}`);
+  return result.stdout;
+}
+
+/** Snapshots finish in the background; a box can start from one only once it is ready. */
+async function readySnapshot(box: UpstashBox, timeoutMs = 15 * 60_000) {
+  const { id } = await box.snapshot({ name: `marshal-factory-base-${Date.now()}` });
+  for (const started = Date.now(); Date.now() - started < timeoutMs; await new Promise((r) => setTimeout(r, 5_000))) {
+    const status = (await box.listSnapshots()).find((s) => s.id === id)?.status;
+    if (status === "ready") return id;
+    if (status === "error" || status === "deleted") throw new Error(`snapshot ${id} ended ${status}`);
+  }
+  throw new Error(`snapshot ${id} was not ready within ${timeoutMs / 60_000} minutes`);
+}
+
+/**
+ * The base layers in a fresh Upstash box. A box runs as boxuser, and its /root is a noexec tmpfs
+ * emptied at every start, so the layers run as root with boxuser's home (UPSTASH_HOME), and that home
+ * and the factory's directories are then handed to boxuser.
+ */
+export const openUpstashBuildSandbox: OpenBuildSandbox = async (limits, log) => {
+  forbidInTest("Upstash");
+  const box = await upstash.api.create({ name: `image-build-${Date.now()}`, labels: ["mf:image-build"], env: {} });
+  try {
+    log("building the Upstash base snapshot (the first build takes a few minutes)");
+    for (const layer of baseLayers(limits, UPSTASH_HOME)) await boxSh(box, layer.replace(/^RUN /, ""), { root: true });
+    // Upstash links ~/.claude and ~/.codex into /workspace/home, its persistent volume, which a chown of the home does not follow.
+    const owned = [UPSTASH_HOME, UPSTASH_WORKSPACE, PSTACK_DIR, FACTORY_ROOT, dirname(REPO_DIR)];
+    await boxSh(box, `mkdir -p ${owned.map(shellQuote).join(" ")} && chown -R boxuser: ${owned.map(shellQuote).join(" ")}`, { root: true });
+  } catch (error) {
+    await box.delete().catch(() => {});
+    throw error;
+  }
+  return {
+    sandboxId: upstashId(box.id),
+    async exec(command, params) {
+      const result = await box.exec.command(PINNED_TOOLS_FIRST + commandLine(command[0]!, command.slice(1), { cwd: params?.workdir, timeoutMs: params?.timeoutMs }));
+      return {
+        stdin: { writeText: async () => {}, close: async () => {} },
+        stdout: { readText: async () => result.stdout },
+        stderr: { readText: async () => result.stderr },
+        wait: async () => result.exitCode ?? (result.status === "completed" ? 0 : 1),
+      };
+    },
+    filesystem: {
+      readText: (path) => box.files.read(path),
+      writeText: (data, path) => box.files.write({ path, content: data }),
+    },
+    terminate: () => box.delete(),
+    snapshotFilesystem: async () => ({ imageId: await readySnapshot(box) }),
+    tunnels: async () => ({}),
+  };
 };
 
 async function sh(sandbox: SandboxHandle, script: string, timeoutMs = 120_000) {

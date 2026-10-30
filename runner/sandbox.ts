@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import type { FactoryConfig, SandboxLimits } from "../lib/config";
+import { UPSTASH_IMAGE_PATH, type FactoryConfig, type SandboxLimits } from "../lib/config";
 import type { ExecError } from "../lib/exec";
 import { sandboxTokens, type RepoName } from "../lib/github/app";
 import type { JobHost } from "../lib/host";
@@ -9,23 +9,19 @@ import { createSandbox, modalHost, rememberSandbox, sandboxName } from "../lib/m
 import {
   BROWSER_SERVER,
   browserServer,
-  CODEX_AUTH,
   CODEX_HOME,
   enabledPstack,
   FACTORY_ROOT,
-  GITHUB_TOKEN_PATH,
-  INGEST_CONFIG_PATH,
+  pathsOf,
   PSTACK_PLUGIN,
   readSandboxImage,
   readSlotHealth,
   REPO_DIR,
-  SANDBOX_HOME,
   SLOT_HEALTH_PATH,
   slotAuthMtime,
   slotAuthPath,
   slotUnusable,
   T3_PORT,
-  T3_USERDATA,
   type SandboxImage,
   type SlotHealth,
 } from "../lib/sandbox";
@@ -56,8 +52,11 @@ function writeAtomic(path: string, text: string) {
 /** What a launch reads from this machine; regressions replace any of it. */
 export const sandboxRuntime = {
   image: (): SandboxImage | null => readSandboxImage(),
+  /** The Upstash base snapshot, recorded like the Modal image; its imageId is the snapshot id. */
+  upstashImage: (): SandboxImage | null => readSandboxImage(UPSTASH_IMAGE_PATH),
   claudeToken: (): string | undefined => process.env.CLAUDE_CODE_OAUTH_TOKEN || undefined,
   modalToken: () => Boolean(process.env.MODAL_TOKEN_ID) || existsSync(join(homedir(), ".modal.toml")),
+  upstashToken: () => Boolean(process.env.UPSTASH_BOX_API_KEY),
   githubToken: (repo: RepoName) => sandboxTokens.get(repo),
   /** The configured CODEX_HOME dirs that hold a login. */
   slots: (limits: Pick<SandboxLimits, "codexSlots">) => limits.codexSlots.filter((slot) => existsSync(slotAuthPath(slot))),
@@ -113,12 +112,12 @@ export function sandboxHarness(harness: HarnessChoice, driver: string, hasClaude
 /** Only a sandbox thread on Codex needs a Codex login slot; Claude Code logs in with the runner's token, in any number of sandboxes. */
 export const needsCodexSlot = (provider: string | null) => provider !== CLAUDE;
 
-export const t3Settings = (choice: HarnessChoice, hasClaude: boolean) => ({
+export const t3Settings = (choice: HarnessChoice, hasClaude: boolean, codexHome = CODEX_HOME) => ({
   defaultModelSelection: { instanceId: choice.provider, model: choice.model },
   textGenerationModelSelection: { instanceId: choice.provider, model: choice.model },
   defaultRuntimeMode: "full-access",
   providerInstances: {
-    [CODEX]: { driver: CODEX, enabled: true, config: { binaryPath: "codex", homePath: CODEX_HOME } },
+    [CODEX]: { driver: CODEX, enabled: true, config: { binaryPath: "codex", homePath: codexHome } },
     [CLAUDE]: { driver: CLAUDE, enabled: hasClaude },
   },
 });
@@ -175,13 +174,14 @@ async function loggedIn(host: JobHost, command: string, args: string[]) {
  * The GitHub token the image's git credential helper and gh wrapper read. Rewriting it is all a
  * token refresh takes: nothing caches it, and it is never in the environment.
  */
-export const writeGithubToken = (host: JobHost, token: string) => writeSecretFile(host, GITHUB_TOKEN_PATH, token);
+export const writeGithubToken = (host: JobHost, token: string) => writeSecretFile(host, pathsOf(host).githubToken, token);
 
 /** Puts the slot's login in the sandbox and checks Codex accepts it; CodexLoginError when it does not. */
 export async function installCodexLogin(host: JobHost, slot: string, auth: string) {
-  await host.run("mkdir", ["-p", CODEX_HOME], { timeoutMs: 30_000 });
-  await host.run("chmod", ["700", CODEX_HOME], { timeoutMs: 30_000 });
-  await writeSecretFile(host, CODEX_AUTH, auth);
+  const { codexHome, codexAuth } = pathsOf(host);
+  await host.run("mkdir", ["-p", codexHome], { timeoutMs: 30_000 });
+  await host.run("chmod", ["700", codexHome], { timeoutMs: 30_000 });
+  await writeSecretFile(host, codexAuth, auth);
   if (!(await loggedIn(host, "codex", ["login", "status"]))) throw new CodexLoginError(slot);
 }
 
@@ -234,7 +234,8 @@ async function refreshWarmCheckout(host: JobHost, repo: string, setup: readonly 
  * does; the harness it runs on comes back.
  */
 export async function setupSandbox(host: JobHost, setup: SandboxSetup, codexModel: string): Promise<{ choice: HarnessChoice; fallback?: string }> {
-  await host.run("mkdir", ["-p", T3_USERDATA, "/work"], { timeoutMs: 30_000 });
+  const paths = pathsOf(host);
+  await host.run("mkdir", ["-p", paths.t3Userdata, "/work"], { timeoutMs: 30_000 });
   if (setup.codex) await installCodexLogin(host, setup.codex.slot, setup.codex.auth);
   let { choice, hasClaude } = setup;
   let fallback: string | undefined;
@@ -248,9 +249,9 @@ export async function setupSandbox(host: JobHost, setup: SandboxSetup, codexMode
       await installCodexLogin(host, codex.slot, codex.auth);
     }
   }
-  await host.writeFile(`${CODEX_HOME}/config.toml`, codexConfig(await host.readFile(`${CODEX_HOME}/config.toml`), setup.job && { ...setup.job, repo: setup.repo }));
-  await host.writeFile(`${T3_USERDATA}/settings.json`, json(t3Settings(choice, hasClaude)));
-  if (setup.ingest !== null) await writeSecretFile(host, INGEST_CONFIG_PATH, setup.ingest);
+  await host.writeFile(`${paths.codexHome}/config.toml`, codexConfig(await host.readFile(`${paths.codexHome}/config.toml`), setup.job && { ...setup.job, repo: setup.repo }));
+  await host.writeFile(`${paths.t3Userdata}/settings.json`, json(t3Settings(choice, hasClaude, paths.codexHome)));
+  if (setup.ingest !== null) await writeSecretFile(host, paths.ingestConfig, setup.ingest);
   await writeGithubToken(host, setup.githubToken);
   if (setup.warm) await refreshWarmCheckout(host, setup.repo, setup.warm.setup);
   else await host.run("git", ["clone", "--quiet", `https://github.com/${setup.repo}.git`, REPO_DIR], { timeoutMs: 300_000 });
@@ -273,15 +274,15 @@ async function wire(host: JobHost) {
     await host.run("ln", ["-sfn", FACTORY_ROOT, root], { timeoutMs: 30_000 });
   }
   const parse = (text: string | null): Json => (text ? (JSON.parse(text) as Json) : {});
-  const userSettings = `${SANDBOX_HOME}/.claude/settings.json`;
-  const userConfig = `${SANDBOX_HOME}/.claude.json`;
+  const userSettings = `${pathsOf(host).home}/.claude/settings.json`;
+  const userConfig = `${pathsOf(host).home}/.claude.json`;
   await host.writeFile(userSettings, json(withHooks(parse(await host.readFile(userSettings)), FACTORY_ROOT)));
   const config = withServer(parse(await host.readFile(userConfig)), FACTORY_ROOT);
   const mcpServers = { ...(config.mcpServers as Json), [BROWSER_SERVER]: browserServer };
   await host.writeFile(userConfig, json({ ...config, mcpServers, hasCompletedOnboarding: true }));
 }
 
-const T3_RUNTIME = `${T3_USERDATA}/server-runtime.json`;
+const t3Runtime = (host: JobHost) => `${pathsOf(host).t3Userdata}/server-runtime.json`;
 
 /**
  * Started from an exec, `t3 serve` outlives it. Its log holds a pairing token, so it is never read
@@ -290,10 +291,10 @@ const T3_RUNTIME = `${T3_USERDATA}/server-runtime.json`;
  * that has not paired, so the open port grants nothing without a pairing token.
  */
 export async function startT3(host: JobHost) {
-  await host.remove(T3_RUNTIME);
+  await host.remove(t3Runtime(host));
   await sh(host, `nohup ${host.t3} serve --host 0.0.0.0 --port ${T3_PORT} ${REPO_DIR} > /work/t3.log 2>&1 &`);
   for (let i = 0; i < 60; i++) {
-    if (await host.exists(T3_RUNTIME)) return;
+    if (await host.exists(t3Runtime(host))) return;
     await new Promise((resolve) => setTimeout(resolve, 2_000));
   }
   throw new Error("t3 serve did not become ready in the sandbox within 120 s");

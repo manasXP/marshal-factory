@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import type { ExecOptions } from "./exec";
 import { localHost, type JobHost } from "./host";
-import { SANDBOX_HOME } from "./sandbox";
+import { pathsOf } from "./sandbox";
 import { forbidInTest } from "./test-mode";
 
 // The factory's one way into a job's T3, on whichever host runs it. Starting, messaging, showing
@@ -91,7 +91,7 @@ const toolResult = z.object({
 });
 
 function userdataDir(host: JobHost) {
-  if (host !== localHost) return `${SANDBOX_HOME}/.t3/userdata`;
+  if (host !== localHost) return pathsOf(host).t3Userdata;
   return join(process.env.T3CODE_HOME ?? join(homedir(), ".t3"), "userdata");
 }
 

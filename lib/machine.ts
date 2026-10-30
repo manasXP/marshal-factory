@@ -67,8 +67,8 @@ export const imageDrift = (built: ImageVersions, pinned: ImageVersions): ImageDr
     return want !== undefined && built[component] !== want ? [{ component, built: built[component], pinned: want }] : [];
   });
 
-export const rebuildText = (drift: readonly ImageDrift[]) =>
-  `Rebuild the sandbox image: ${drift.map((d) => `${componentName(d.component)} ${d.built ?? "missing"} → ${d.pinned}`).join(", ")}`;
+export const rebuildText = (drift: readonly ImageDrift[], what = "the sandbox image") =>
+  `Rebuild ${what}: ${drift.map((d) => `${componentName(d.component)} ${d.built ?? "missing"} → ${d.pinned}`).join(", ")}`;
 
 /** The runner's own rebuild of the base image: one in flight, or the last one that failed. */
 export const baseImageBuildSchema = z.discriminatedUnion("state", [
@@ -98,6 +98,12 @@ export const sandboxReadinessSchema = z.object({
   maxParallel: z.number().int().positive().optional(),
   /** Absent when no rebuild runs and none failed; older runners never report one. */
   imageBuild: baseImageBuildSchema.optional(),
+  /** Upstash Box: whether the runner has its API key, and what its base snapshot holds. Absent while Upstash is not set up. */
+  upstash: z.boolean().optional(),
+  upstashImageInfo: z
+    .object({ t3Version: z.string(), builtAt: z.string(), factoryCommit: z.string(), versions: imageVersionsSchema.optional() })
+    .nullable()
+    .optional(),
 });
 export type SandboxReadiness = z.infer<typeof sandboxReadinessSchema>;
 

@@ -226,7 +226,7 @@ try {
   assert.deepEqual(harness.options!.map((o) => o.value), [SETTINGS_DEFAULT, "claude-1"], "Settings default and the enabled harnesses");
   assert.equal(harness.initial_option?.value, SETTINGS_DEFAULT);
   const runsOn = block(blankView, NEW_JOB_BLOCKS.runsOn)!.element!;
-  assert.deepEqual(runsOn.options!.map((o) => o.text.text), ["Settings default", "Local", "Cloud"]);
+  assert.deepEqual(runsOn.options!.map((o) => o.text.text), ["Settings default", "Local", "Cloud", "Upstash"]);
   assert.equal(runsOn.initial_option?.value, SETTINGS_DEFAULT);
   assert.ok(!JSON.stringify(blankView).includes("tracking-") && !/"[A-Z ]{6,}"/.test(JSON.stringify(blankView)), "plain sentence-case labels");
 

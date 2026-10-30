@@ -63,7 +63,7 @@ const table: { name: string; labels: ReturnType<typeof L>[]; want: ReturnType<ty
   {
     name: "an unknown place",
     labels: [L("Sky", "Runs on")],
-    want: { problems: ['The Runs on label "Sky" is neither Local nor Cloud, so it runs where Settings say.'] },
+    want: { problems: ['The Runs on label "Sky" is neither Local nor Cloud nor Upstash, so it runs where Settings say.'] },
   },
 ];
 for (const c of table) assert.deepEqual(ticketOverrides(asked(c.labels), harnesses), c.want, c.name);
@@ -83,14 +83,22 @@ assert.deepEqual(
 
 assert.deepEqual(desiredLabelGroups([...harnesses, harness("codex2", "codex", "codex", [])]), [
   { group: "Harness", children: ["Claude Code", "Codex", "Cursor", "Codex Lab"] },
-  { group: "Runs on", children: ["Local", "Cloud"] },
+  { group: "Runs on", children: ["Local", "Cloud", "Upstash"] },
 ], "one child per enabled harness name, disabled ones left out");
 
 // planLaunch: overrides field by field over Settings, the model, and each fallback.
 const settings = { harness: { provider: "claudeAgent", model: "claude-sonnet-5-5", from: "settings" as const }, execution: "local" as const };
 const can = { local: true, checkout: true, modal: null as string | null, claude: true, codexSlot: true, driverOf: (p: string) => harnesses.find((h) => h.id === p)?.driver ?? p, codexModel: "gpt-6-astra" };
-const plan = (labels: ReturnType<typeof L>[], over: Partial<typeof can> = {}, s: typeof settings | (Omit<typeof settings, "execution"> & { execution: "modal" }) = settings) =>
-  planLaunch(asked(labels), s, harnesses, { ...can, ...over });
+// Upstash cannot launch here unless a case says so, so these cases read as they did with Modal alone.
+const NO_UPSTASH = "there is no Upstash Box API key";
+const plan = (
+  labels: ReturnType<typeof L>[],
+  over: Partial<typeof can> & { upstash?: string | null } = {},
+  s: typeof settings | (Omit<typeof settings, "execution"> & { execution: "modal" | "upstash" }) = settings,
+) => {
+  const { modal, upstash, ...rest } = { ...can, upstash: NO_UPSTASH, ...over };
+  return planLaunch(asked(labels), s, harnesses, { ...rest, cloud: { modal, upstash } });
+};
 
 assert.deepEqual(plan([L("factory")]), { kind: "launch", execution: "local", harness: { provider: "claudeAgent", model: "claude-sonnet-5-5" }, ticket: null }, "no overrides: Settings");
 assert.deepEqual(
@@ -177,6 +185,23 @@ assert.deepEqual(
 );
 assert.equal(plan([L("factory")], { modal: "no image", local: false }, { ...settings, execution: "modal" }).kind, "launch", "Settings alone never fall back: the sandbox path waits as before");
 assert.equal(plan([L("Cloud", "Runs on")], { modal: null }).kind, "launch", "busy slots are not a reason to fall back; the sandbox path keeps it queued");
+
+// Upstash Box, the second cloud.
+const where = (p: ReturnType<typeof plan>) => (p.kind === "launch" ? p.execution : p.kind);
+assert.equal(where(plan([L("Upstash", "Runs on")], { upstash: null })), "upstash", "the Upstash label sends a job to Upstash Box");
+assert.equal(where(plan([L("Upstash Box", "Runs on")], { upstash: null })), "upstash", "so does its long name");
+const noUpstash = plan([L("Upstash", "Runs on")]);
+assert.equal(where(noUpstash), "local", "Upstash that cannot launch falls back to this Mac, never to Modal");
+assert.match(noUpstash.kind === "launch" ? noUpstash.ticket!.notes.join(" ") : "", /there is no Upstash Box API key/, "and says why");
+assert.equal(where(plan([L("Upstash", "Runs on")], { local: false })), "wait", "nor anywhere else when this Mac cannot run it either");
+assert.equal(
+  where(plan([L("Local", "Runs on")], { local: false, upstash: null }, { ...settings, execution: "upstash" })),
+  "upstash",
+  "a job that cannot run locally goes to Settings' own cloud",
+);
+assert.equal(where(plan([L("Local", "Runs on")], { local: false, upstash: null }, { ...settings, execution: "modal" })), "modal", "Modal when Settings name it");
+assert.equal(where(plan([L("factory")], { checkout: false, modal: "no sandbox image is built", upstash: null })), "upstash", "a repo with no checkout reaches whichever cloud can launch");
+assert.equal(where(plan([L("factory")], {}, { ...settings, execution: "upstash" })), "upstash", "Settings alone send jobs to Upstash");
 
 const split = splitByExecution([
   { key: "a", execution: "local" as const },
@@ -273,7 +298,7 @@ const result = await syncOverrideLabels([syncer]);
 const synced = result.synced?.linear;
 assert.deepEqual(synced, {
   team: "FAC",
-  created: ["Harness / Claude Code", "Harness / Cursor", "Harness / Codex Lab"],
+  created: ["Harness / Claude Code", "Harness / Cursor", "Harness / Codex Lab", "Runs on / Upstash"],
   problems: ['A label named "Local" exists outside the Runs on group; move it into the group in Linear.'],
 }, "the sync adds what is missing, reports a name taken elsewhere, and never renames or moves it");
 assert.deepEqual(await syncOverrideLabels([syncer]), { synced: { linear: { team: "FAC", created: [], problems: synced!.problems } } }, "a second sync creates nothing");

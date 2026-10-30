@@ -4,7 +4,7 @@ import type { ExecError } from "../lib/exec";
 import type { RepoName } from "../lib/github/app";
 import { HostGoneError, hosts, localHost, type JobHost } from "../lib/host";
 import { withPlaybook } from "../lib/playbook";
-import { builtVersions, imageProblem, REPO_DIR } from "../lib/sandbox";
+import { builtVersions, imageProblem, REPO_DIR, upstashImageProblem } from "../lib/sandbox";
 import { baseImageBuild } from "./base-image";
 import { modalSecretName, parseDetail, repoImage } from "../lib/onboarding";
 import { RECIPE_PATH, UNMERGED_RECIPE_PATH, type Recipe } from "../lib/recipe";
@@ -12,7 +12,7 @@ import { listThreads, showThread, startThread as t3Start } from "../lib/t3-clien
 import { PENDING } from "./binding";
 import { thisMachine } from "./heartbeat";
 import type { JobSource } from "../lib/sources/types";
-import { type Execution, isCloud } from "../lib/execution";
+import { isCloud, type CloudExecution, type Execution } from "../lib/execution";
 import type { HarnessChoice } from "../lib/settings";
 import type { RepoSettingsRow } from "../db/schema";
 import { routeRepo, withRepoDefaults, type Registry } from "../lib/repositories";
@@ -248,8 +248,9 @@ export async function launchQueued(onWorktree: (check: Record<string, unknown>) 
     if (problems.length > 0 && !repoDefaults.some((d) => d.repo === job.repo)) repoDefaults.push({ repo: job.repo, problems });
     const row = registry.find((r) => r.repo === job.repo);
     const image = repoImage(row, null);
-    const modal = can.modal ?? (image.kind === "blocked" ? image.reason : null);
-    const plan = planLaunch(asked, defaults, harnesses, { ...can, modal, checkout: checkouts.has(job.repo) });
+    // Only Modal starts from a repo's warm image, so only Modal waits for its onboarding.
+    const modal = can.cloud.modal ?? (image.kind === "blocked" ? image.reason : null);
+    const plan = planLaunch(asked, defaults, harnesses, { ...can, cloud: { ...can.cloud, modal }, checkout: checkouts.has(job.repo) });
     switch (plan.kind) {
       case "launch": {
         // The claim routed the job already; a Repository label that could not apply is told like any other fallback.
@@ -273,11 +274,12 @@ export async function launchQueued(onWorktree: (check: Record<string, unknown>) 
   if (noCheckout.length > 0) overrideRuntime.log("repo:no-checkout", { modal: noCheckout });
   const jobs = new Map(queued.map((q) => [q.key, q.job]));
   const claimed: Claimed = (entry) => announceFallbacks(jobs.get(entry.key)!, entry.ticket);
-  const { local, modal } = splitByExecution(planned);
+  const { local, modal, upstash } = splitByExecution(planned);
   return [
     ...recovered,
     ...(local.length > 0 ? await launchLocal(local, checkouts, slot, claimed, onWorktree) : []),
     ...(modal.length > 0 ? await launchInSandboxes(modal, slot, claimed, registry) : []),
+    ...(upstash.length > 0 ? await launchInSandboxes(upstash, slot, claimed, registry, "upstash") : []),
   ];
 }
 
@@ -341,6 +343,16 @@ class SandboxSetupError extends Error {}
  */
 export type SandboxStart = { imageId: string; namedSecrets: string[]; warm?: { setup: readonly string[] }; outdated?: string } | { blocked: string };
 
+/**
+ * An Upstash launch starts from the base snapshot and clones the repo, as a Modal launch from the
+ * base image does; warm repo images and repo secrets are Modal's only for now.
+ */
+export function upstashStart(row: RepoSettingsRow | undefined, imageId: string): SandboxStart {
+  const detail = parseDetail(row?.onboarding_detail);
+  if (row && (detail.secretsSet ?? []).length > 0) return { blocked: `${row.repo} has repo secrets, which Upstash Box jobs cannot use yet; run it on Modal` };
+  return { imageId, namedSecrets: [] };
+}
+
 export function sandboxStart(row: RepoSettingsRow | undefined, base: { imageId: string; builtAt: string; versions: ReturnType<typeof builtVersions> }): SandboxStart {
   const choice = repoImage(row, { versions: base.versions, builtAt: base.builtAt });
   const detail = parseDetail(row?.onboarding_detail);
@@ -395,18 +407,26 @@ export function withRecipeNote(message: string, row: RepoSettingsRow | undefined
   ].join("\n");
 }
 
-export async function launchInSandboxes(pending: readonly LaunchEntry[], slot: LaunchSlot, claimed: Claimed = async () => {}, registry: Registry = []) {
+export async function launchInSandboxes(
+  pending: readonly LaunchEntry[],
+  slot: LaunchSlot,
+  claimed: Claimed = async () => {},
+  registry: Registry = [],
+  execution: CloudExecution = "modal",
+) {
   const limits = config.factory.sandbox;
   const runtime = sandboxRuntime;
-  const image = runtime.image();
-  const problem = imageProblem(image, limits);
+  const image = execution === "upstash" ? runtime.upstashImage() : runtime.image();
+  const problem = execution === "upstash" ? upstashImageProblem(image, limits) : imageProblem(image, limits);
   if (problem || !image) {
-    const build = baseImageBuild();
-    runtime.log("sandbox:no-image", { queued: pending.map((e) => e.key), reason: problem, ...(build && { build }) });
+    // The runner rebuilds Modal's image on its own; the Upstash snapshot is built by hand.
+    const build = execution === "modal" ? baseImageBuild() : undefined;
+    runtime.log("sandbox:no-image", { execution, queued: pending.map((e) => e.key), reason: problem, ...(build && { build }) });
     return [];
   }
   const base = { imageId: image.imageId, builtAt: image.builtAt, versions: builtVersions(image) };
-  const starts = new Map(pending.map((entry) => [entry.key, sandboxStart(registry.find((r) => r.repo === entry.repo), base)]));
+  const startOf = (row: RepoSettingsRow | undefined) => (execution === "upstash" ? upstashStart(row, base.imageId) : sandboxStart(row, base));
+  const starts = new Map(pending.map((entry) => [entry.key, startOf(registry.find((r) => r.repo === entry.repo))]));
   const claudeToken = runtime.claudeToken();
   const byKey = new Map(pending.map((entry) => [entry.key, entry]));
   let room = limits.maxParallel - (await sandboxesInFlight(slot.id));
@@ -423,7 +443,7 @@ export async function launchInSandboxes(pending: readonly LaunchEntry[], slot: L
       }
       if (start.outdated) runtime.log("sandbox:warm-image-outdated", { key, repo: entry.repo, reason: start.outdated });
       const { choice, fallback } = sandboxHarness(entry.harness, runtime.driverOf(entry.harness.provider), Boolean(claudeToken), limits.codexModel);
-      if (!(await claimLaunch(key, marker, slot, choice, { execution: "modal", ticket: entry.ticket }))) return false;
+      if (!(await claimLaunch(key, marker, slot, choice, { execution, ticket: entry.ticket }))) return false;
       const codexSlot = needsCodexSlot(choice.provider) ? await leaseCodexSlot(key, marker, usableSlots(limits)) : null;
       if (codexSlot === undefined) {
         await releaseLaunch(key, marker);
@@ -445,7 +465,7 @@ export async function launchInSandboxes(pending: readonly LaunchEntry[], slot: L
       try {
         const codex = lease.slot ? loginOf(lease.slot) : null;
         const githubToken = await runtime.githubToken(entry.repo as RepoName);
-        const backend = backendFor("modal");
+        const backend = backendFor(execution);
         const created = await backend.create({
           key: entry.key,
           attempt: entry.attempt,
@@ -494,7 +514,7 @@ export async function launchInSandboxes(pending: readonly LaunchEntry[], slot: L
         throw new SandboxSetupError(`sandbox setup failed: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
       }
       // Images stay on this machine for now; the thread gets the issue text with their links.
-      const message = await withPlaybook(withRecipeNote(entry.message, registry.find((r) => r.repo === entry.repo)), "modal", host, REPO_DIR);
+      const message = await withPlaybook(withRecipeNote(entry.message, registry.find((r) => r.repo === entry.repo)), execution, host, REPO_DIR);
       return startThread(host, REPO_DIR, entry.branch, entry.threadTitle, message, ran);
     },
     bind: bindThread,

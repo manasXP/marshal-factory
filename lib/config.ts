@@ -13,6 +13,8 @@ export const TEST_MACHINE_ID = "test-machine";
 
 /** The Modal image runners launch sandboxes from; scripts/sandbox-image.ts writes it. */
 export const SANDBOX_IMAGE_PATH = process.env.MARSHAL_FACTORY_SANDBOX_IMAGE ?? join(dirname(CONFIG_PATH), "sandbox-image.json");
+/** The Upstash base snapshot, recorded as the Modal image is, in its own file. */
+export const UPSTASH_IMAGE_PATH = process.env.MARSHAL_FACTORY_UPSTASH_IMAGE ?? join(dirname(CONFIG_PATH), "sandbox-image.upstash.json");
 
 export const GITHUB_APP_PATH = process.env.MARSHAL_FACTORY_GITHUB_APP ?? join(homedir(), ".config/marshal-factory/github-app.json");
 
@@ -54,6 +56,15 @@ export const sandboxSchema = z
   })
   .prefault({});
 export type SandboxLimits = z.infer<typeof sandboxSchema>;
+
+/** Upstash Box, the second cloud. It shares factory.sandbox's pins, timeout and maxParallel; see runner/sandbox-backend.ts. */
+const upstashSchema = z
+  .object({
+    /** small is 2 vCPU and 4 GB, the free plan's only size; medium and large need a paid plan. */
+    size: z.enum(["small", "medium", "large"]).default("small"),
+  })
+  .prefault({});
+export type UpstashLimits = z.infer<typeof upstashSchema>;
 
 /** Every factory limit lives here, with defaults; the config file overrides any of them. */
 export const factorySchema = z
@@ -110,6 +121,7 @@ export const factorySchema = z
       })
       .prefault({}),
     sandbox: sandboxSchema,
+    upstash: upstashSchema,
   })
   .prefault({});
 export type FactoryLimits = z.infer<typeof factorySchema>;

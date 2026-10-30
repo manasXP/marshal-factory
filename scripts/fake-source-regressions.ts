@@ -105,7 +105,7 @@ try {
   assert.equal(entry.branch, branch);
   assert.match(entry.message, new RegExp(`^Work fake item ${key}: Fake item\n${draft.url.replaceAll(".", "\\.")}`));
   const settings = { harness: { provider: "claudeAgent", model: "m", from: "settings" as const }, execution: "local" as const };
-  const can = { local: true, checkout: true, modal: null, claude: true, codexSlot: true, driverOf: (p: string) => p, codexModel: "c" };
+  const can = { local: true, checkout: true, cloud: { modal: null, upstash: "no key" }, claude: true, codexSlot: true, driverOf: (p: string) => p, codexModel: "c" };
   const plan = planLaunch(sourceFor(job.source).overrides(job.source_state), settings, null, can);
   assert.equal(plan.kind === "launch" && plan.execution, "modal", "the source's normalized Runs on override applies");
   const started: string[] = [];
