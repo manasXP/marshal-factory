@@ -146,7 +146,7 @@ export const jobs = pgTable(
     previous_failure: text("previous_failure"),
     /** The owner's note for one attempt, from Retry in the inbox. Keyed by attempt, so a later attempt ignores a stale note and the claim need not clear it. */
     attempt_note: jsonb("attempt_note").$type<{ attempt: number; text: string }>(),
-    /** Unused: the per-attempt cap it held was removed. Kept, with a default, for runners and ingest deployed before that. */
+    /** This attempt's spend limit in USD, from Settings at the claim and raised by the owner's answer when it pauses; see lib/spend-limit.ts. */
     budget_usd: doublePrecision("budget_usd").notNull().default(5),
     /** When the watchdog nudged a stuck run, and in which stage; cleared once the stage moves on. */
     nudged_at: ts("nudged_at"),
@@ -349,6 +349,8 @@ export const settings = pgTable("settings", {
   model: text("model").notNull(),
   /** Where runners start new threads; see lib/execution.ts. */
   execution: text("execution").$type<Execution>().notNull().default(DEFAULT_EXECUTION),
+  /** Each new attempt's spend limit in USD, and how far an answer without an amount raises a paused one; see lib/spend-limit.ts. */
+  spend_limit_usd: doublePrecision("spend_limit_usd").notNull().default(10),
   updated_at: ts("updated_at").notNull(),
   /** The owner's email. */
   updated_by: text("updated_by").notNull(),

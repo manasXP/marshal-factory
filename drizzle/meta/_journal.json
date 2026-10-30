@@ -281,6 +281,13 @@
       "when": 1793310218530,
       "tag": "0039_failed_job_retry",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1793396770930,
+      "tag": "0040_settings_spend_limit",
+      "breakpoints": true
     }
   ]
 }

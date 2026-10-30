@@ -194,7 +194,7 @@ export function RunDetail({
   fullView: FullView;
   audit: { feed: Feed<AuditRow>; path: string } | undefined;
   evidence: { feed: Feed<JobEvidenceRow>; path: string } | undefined;
-  jobSpend: { usd: number; attempt: number } | undefined;
+  jobSpend: { usd: number; attempt: number; limit: number } | undefined;
   stagesPath: string;
   job: JobRow | undefined;
   machine: MachineRow | undefined;
@@ -217,9 +217,9 @@ export function RunDetail({
 
   const place = machineName && (where?.kind === "modal" ? `Cloud sandbox via ${machineName}` : `Local · ${machineName}`);
   const spend = jobSpend ? (
-    <span title={jobSpend.attempt > 1 ? "Spend of this attempt" : "Spend"}>
+    <span title={`${jobSpend.attempt > 1 ? "Spend of this attempt" : "Spend"}, and its spend limit`}>
       {jobSpend.attempt > 1 && `attempt ${jobSpend.attempt} · `}
-      {formatUsd(jobSpend.usd)}
+      {formatUsd(jobSpend.usd)} of {formatUsd(jobSpend.limit)}
     </span>
   ) : (
     formatUsd(runCost(run, agentRows))

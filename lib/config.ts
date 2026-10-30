@@ -61,6 +61,8 @@ export const factorySchema = z
     teamKey: z.string().default("FAC"),
     label: z.string().default("factory"),
     maxInFlight: z.number().int().positive().default(4),
+    /** Each attempt's spend limit in USD when the panel's Settings have none saved; see lib/spend-limit.ts. */
+    spendLimitUsd: z.number().positive().default(10),
     /** A working job with no event for this long, or whose thread stopped, gets one nudge. */
     stuckAfterMinutes: z.number().positive().default(30),
     /** A stopped thread counts as stuck only after this much quiet, so a turn that just ended isn't. */

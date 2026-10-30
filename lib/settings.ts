@@ -7,6 +7,7 @@ import { isOwner, type SessionUser } from "@/lib/auth/owner";
 import { DEFAULT_EXECUTION, executionSchema, type Execution } from "@/lib/execution";
 import type { Harness } from "@/lib/harness";
 import { autonomySchema, DEFAULT_POLICY, type Autonomy, type RepoPolicy } from "@/lib/merge-decision";
+import { DEFAULT_SPEND_LIMIT_USD } from "@/lib/spend-limit";
 
 // The panel's factory settings: which T3 provider instance and model new threads start on, and
 // where. The runner reads them on every launch pass and falls back to its config when none are saved.
@@ -20,13 +21,14 @@ export const settingsInputSchema = z.object({
   provider: z.string().trim().min(1, "Pick a harness."),
   model: z.string().trim().min(1, "Pick a model."),
   execution: executionSchema.default(DEFAULT_EXECUTION),
+  spendLimitUsd: z.coerce.number({ message: "Enter a spend limit in dollars." }).positive("The spend limit must be more than $0.").max(1000, "The spend limit can be at most $1,000.").default(DEFAULT_SPEND_LIMIT_USD),
 });
 export type SettingsInput = z.input<typeof settingsInputSchema>;
 
 export type HarnessChoice = { provider: string; model: string };
 /** Where the harness came from: the panel's Settings, the runner config, or the job's repo default. */
 export type EffectiveHarness = HarnessChoice & { from: "settings" | "config" | "repo" };
-export type SettingsChoice = HarnessChoice & { execution?: Execution };
+export type SettingsChoice = HarnessChoice & { execution?: Execution; spendLimitUsd?: number };
 
 export async function readSettings(database: Db): Promise<SettingsRow | null> {
   const [row] = await database.select().from(settings).where(eq(settings.id, SETTINGS_ID));
@@ -38,6 +40,7 @@ export async function writeSettings(database: Db, choice: SettingsChoice, by: st
     provider: choice.provider,
     model: choice.model,
     ...(choice.execution && { execution: choice.execution }),
+    ...(choice.spendLimitUsd !== undefined && { spend_limit_usd: choice.spendLimitUsd }),
     updated_at: at,
     updated_by: by,
   };
@@ -86,7 +89,7 @@ export async function saveSettings(deps: SettingsDeps, input: unknown): Promise<
   if (!user || !isOwner(user)) return { ok: false, status: 403, message: "Only the factory owner can change settings." };
   const parsed = settingsInputSchema.safeParse(input);
   if (!parsed.success) return { ok: false, status: 400, message: parsed.error.issues[0]?.message ?? "The settings are not valid." };
-  const { provider, model, execution } = parsed.data;
+  const { provider, model, execution, spendLimitUsd } = parsed.data;
   const harnesses = await deps.harnesses();
   if (harnesses) {
     const harness = harnesses.find((h) => h.id === provider && h.enabled);
@@ -94,7 +97,7 @@ export async function saveSettings(deps: SettingsDeps, input: unknown): Promise<
     if (!harness.models.some((m) => m.slug === model)) return { ok: false, status: 400, message: `${harness.name} has no model ${model}.` };
   }
   try {
-    await deps.save({ provider, model, execution }, user.email);
+    await deps.save({ provider, model, execution, spendLimitUsd }, user.email);
     return { ok: true };
   } catch (error) {
     return { ok: false, status: 502, message: `Could not save the settings: ${error instanceof Error ? error.message : String(error)}` };

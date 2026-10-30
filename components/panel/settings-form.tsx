@@ -8,12 +8,14 @@ import { saveSettings } from "@/app/actions/settings";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import type { MachineRow, NotificationSettingsRow, SettingsRow } from "@/db/schema";
 import { DEFAULT_EXECUTION, EXECUTIONS, type Execution } from "@/lib/execution";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER, harnessLabel, trackingOf, type Harness, type Tracking } from "@/lib/harness";
 import { componentName, IMAGE_COMPONENTS, rebuildText, reportedDrift, reportedHarnesses, reportedSandbox, reportedSlack, sandboxLogin, type SandboxReadiness } from "@/lib/machine";
+import { DEFAULT_SPEND_LIMIT_USD } from "@/lib/spend-limit";
 import { NotificationsCard } from "./notifications-card";
 import { useFeed, type Feed } from "./sealed";
 import { PanelFooter, PanelHeader } from "./panel-header";
@@ -247,13 +249,15 @@ export function SettingsForm({ machines, saved, notifications }: { machines: Fee
   const [provider, setProvider] = useState(saved?.provider ?? DEFAULT_PROVIDER);
   const [model, setModel] = useState(saved?.model ?? DEFAULT_MODEL);
   const [execution, setExecution] = useState<Execution>(saved?.execution ?? DEFAULT_EXECUTION);
+  const [spendLimit, setSpendLimit] = useState(String(saved?.spend_limit_usd ?? DEFAULT_SPEND_LIMIT_USD));
   const [failure, setFailure] = useState<string | null>(null);
   const [savedNow, setSavedNow] = useState(false);
   const [pending, startTransition] = useTransition();
 
   const harness = harnesses.find((h) => h.id === provider);
   const modelKnown = harness?.models.some((m) => m.slug === model) ?? false;
-  const unchanged = saved !== null && saved.provider === provider && saved.model === model && saved.execution === execution;
+  const unchanged =
+    saved !== null && saved.provider === provider && saved.model === model && saved.execution === execution && saved.spend_limit_usd === Number(spendLimit);
   const chosen = describe(harnesses, provider, model);
 
   const pickHarness = (id: string | null) => {
@@ -267,7 +271,7 @@ export function SettingsForm({ machines, saved, notifications }: { machines: Fee
   const submit = () => {
     setFailure(null);
     startTransition(async () => {
-      const outcome = await saveSettings({ provider, model, execution });
+      const outcome = await saveSettings({ provider, model, execution, spendLimitUsd: spendLimit });
       if (!outcome.ok) {
         setFailure(outcome.message);
         return;
@@ -380,6 +384,24 @@ export function SettingsForm({ machines, saved, notifications }: { machines: Fee
                       <FieldDescription>Cloud runs each job in its own cloud sandbox; this Mac runs it in the runner&apos;s T3.</FieldDescription>
                     </Field>
                     {execution === "modal" && <SandboxReadinessList readiness={readiness} />}
+                    <Field className="sm:max-w-[calc(50%-0.625rem)]">
+                      <FieldLabel htmlFor="settings-spend-limit">Spend limit per attempt (USD)</FieldLabel>
+                      <Input
+                        id="settings-spend-limit"
+                        type="number"
+                        inputMode="decimal"
+                        min={1}
+                        step={1}
+                        value={spendLimit}
+                        onChange={(e) => {
+                          setSpendLimit(e.target.value);
+                          setSavedNow(false);
+                        }}
+                      />
+                      <FieldDescription>
+                        An attempt that spends this much pauses and asks on its issue for a higher limit. A reply without an amount raises it by this much again. New attempts get the new limit.
+                      </FieldDescription>
+                    </Field>
                   </div>
                 )}
                 {failure && (

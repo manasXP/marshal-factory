@@ -4,7 +4,8 @@ import { attemptBranch } from "./factory";
 
 // inferred: the runner reads a harness that never reports stages (its PR on GitHub, its settled thread).
 // changes: the owner asked for changes on the PR, in the inbox or in a GitHub review.
-// budget: posted only by runners from before the budget cap was removed; kept so their events still read.
+// budget: the attempt reached its spend limit; the runner pauses it in waiting (lib/spend-limit.ts). Runners
+// from before the limit fail it instead, so those events still read.
 export const RUNNER_CAUSES = ["resume", "conflict", "merged", "watchdog", "budget", "stop", "closed", "reclaim", "inferred", "changes"] as const;
 export type RunnerCause = (typeof RUNNER_CAUSES)[number];
 export type Cause = "report" | RunnerCause;
@@ -17,7 +18,7 @@ export function causeOf(eventId: string): Cause {
 }
 
 const REPORTED = ["triage", "investigating", "implementing", "verifying", "pr", "waiting", "failed"] as const;
-const FROM_WORKING = { report: REPORTED, watchdog: ["failed"], budget: ["failed"], stop: ["failed"], merged: ["merged"], inferred: ["pr", "waiting"] } as const;
+const FROM_WORKING = { report: REPORTED, watchdog: ["failed"], budget: ["failed", "waiting"], stop: ["failed"], merged: ["merged"], inferred: ["pr", "waiting"] } as const;
 
 export const STAGE_TRANSITIONS: { readonly [From in Stage]: { readonly [C in Cause]?: readonly Stage[] } } = {
   queued: FROM_WORKING,
@@ -52,6 +53,10 @@ export function decideStage(row: StageRow, move: StageMove): StageVerdict {
   if (row.stage_event_id === move.eventId) return { outcome: "skip", cause, reason: "already applied" };
   if (row.stage_at && move.at < row.stage_at) return { outcome: "skip", cause, reason: "stale" };
   if (move.branch && move.branch !== attemptBranch(row.key, row.attempt)) return { outcome: "skip", cause, reason: "earlier attempt" };
+  // A thread interrupted at its spend limit may still report on its way out; only the owner's answer resumes it.
+  if (row.stage === "waiting" && row.stage_event_id && causeOf(row.stage_event_id) === "budget" && cause === "report") {
+    return { outcome: "refuse", cause, reason: "paused at the spend limit; an answer raising the limit resumes it" };
+  }
   if (!canTransition(row.stage, move.stage, cause)) {
     return { outcome: "refuse", cause, reason: `${row.stage} -> ${move.stage} (${cause}) is not in STAGE_TRANSITIONS` };
   }
