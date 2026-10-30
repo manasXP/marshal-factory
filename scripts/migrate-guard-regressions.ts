@@ -10,14 +10,17 @@ const PRODUCTION_POOLED = "postgresql://u:p@ep-odd-field-b95xpf9v-pooler.c-2.eu-
 const PREVIEW = "postgresql://u:p@ep-preview-branch-a1b2c3d4.c-2.eu-central-1.aws.neon.tech/neondb?sslmode=require";
 const PREVIEW_POOLED = "postgresql://u:p@ep-preview-branch-a1b2c3d4-pooler.c-2.eu-central-1.aws.neon.tech/neondb?sslmode=require";
 
-const preview = { VERCEL_ENV: "preview", DATABASE_URL: PREVIEW_POOLED, DATABASE_URL_UNPOOLED: PREVIEW };
+const ENDPOINTS = { FACTORY_PRODUCTION_ENDPOINTS: "ep-other-endpoint-z9y8x7w6, EP-ODD-FIELD-B95XPF9V" };
+const preview = { VERCEL_ENV: "preview", DATABASE_URL: PREVIEW_POOLED, DATABASE_URL_UNPOOLED: PREVIEW, ...ENDPOINTS };
 assert.equal(migrateRefusal(preview), null, "a preview migrates its own branch");
+assert.match(migrateRefusal({ ...preview, FACTORY_PRODUCTION_ENDPOINTS: undefined }) ?? "", /FACTORY_PRODUCTION_ENDPOINTS is not set/, "a build that can't name production refuses");
+assert.match(migrateRefusal({ ...preview, FACTORY_PRODUCTION_ENDPOINTS: " , " }) ?? "", /FACTORY_PRODUCTION_ENDPOINTS is not set/, "so does a list of blanks");
 assert.match(migrateRefusal({ ...preview, DATABASE_URL_UNPOOLED: PRODUCTION }) ?? "", /DATABASE_URL_UNPOOLED points at the production branch/);
 assert.match(migrateRefusal({ ...preview, DATABASE_URL: PRODUCTION_POOLED }) ?? "", /DATABASE_URL points at the production branch/, "the pooled host counts as production");
 assert.match(migrateRefusal({ ...preview, DATABASE_URL_UNPOOLED: undefined }) ?? "", /DATABASE_URL_UNPOOLED is not set/, "a missing URL refuses");
 assert.match(migrateRefusal({ ...preview, DATABASE_URL: "not a url" }) ?? "", /not a valid URL/, "an unparsable URL refuses");
 assert.match(
-  migrateRefusal({ DATABASE_URL: PRODUCTION_POOLED, DATABASE_URL_UNPOOLED: PRODUCTION }) ?? "",
+  migrateRefusal({ DATABASE_URL: PRODUCTION_POOLED, DATABASE_URL_UNPOOLED: PRODUCTION, ...ENDPOINTS }) ?? "",
   /in a non-production build/,
   "a build that names no environment is not production",
 );
@@ -27,6 +30,7 @@ assert.equal(
   null,
   "a production build migrates production",
 );
+assert.equal(migrateRefusal({ VERCEL_ENV: "production", DATABASE_URL: PRODUCTION_POOLED, DATABASE_URL_UNPOOLED: PRODUCTION }), null, "and needs no endpoint list");
 
 const PRODUCTION_HOST = "ep-odd-field-b95xpf9v.c-2.eu-central-1.aws.neon.tech";
 const GENERIC = "postgresql://u:p@c-2.eu-central-1.aws.neon.tech/neondb?sslmode=require";
@@ -50,7 +54,7 @@ assert.equal(endpointOf(`${GENERIC}&options=endpoint%3Dep-preview-branch-a1b2c3d
 assert.equal(migrateRefusal(viaPreview(`${GENERIC}&options=endpoint%3Dep-preview-branch-a1b2c3d4`)), null, "a preview may select its own endpoint by option");
 assert.equal(migrateRefusal(viaPreview(`${PREVIEW}&options=endpoint%3Dep-preview-branch-a1b2c3d4`)), null, "an option that agrees with the host is fine");
 
-function guard(env: Record<string, string>) {
+function guard(env: Record<string, string | undefined>) {
   try {
     execFileSync("bun", ["scripts/migrate-guard.ts"], { env: { ...process.env, ...env }, stdio: "pipe" });
     return { code: 0, stderr: "" };
@@ -64,6 +68,7 @@ assert.equal(refused.code, 1, "the build command stops before drizzle-kit runs")
 assert.match(refused.stderr, /Refusing to migrate/);
 assert.doesNotMatch(refused.stderr, /u:p@/, "the refusal never prints a connection string");
 assert.equal(guard(preview).code, 0);
+assert.equal(guard({ ...preview, FACTORY_PRODUCTION_ENDPOINTS: "" }).code, 1, "the build command stops without the endpoint list");
 
 const { buildCommand } = JSON.parse(readFileSync("vercel.json", "utf8")) as { buildCommand: string };
 assert.ok(buildCommand.startsWith("bun scripts/migrate-guard.ts && bun run db:migrate"), "the Vercel build checks before it migrates");

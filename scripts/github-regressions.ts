@@ -188,7 +188,7 @@ async function setupScriptEndToEnd(api: string) {
   const dir = mkdtempSync(join(tmpdir(), "github-app-setup-"));
   const path = join(dir, "config/github-app.json");
   const port = 30_000 + Math.floor(Math.random() * 10_000);
-  const child = spawn("bun", ["scripts/setup-github-app.ts", "--port", String(port), "--no-open"], {
+  const child = spawn("bun", ["scripts/setup-github-app.ts", "--port", String(port), "--no-open", "--name", "marshal-factory-test", "--url", "https://github.com/test/marshal-factory"], {
     env: {
       ...process.env,
       GITHUB_URL: api,
@@ -213,8 +213,8 @@ async function setupScriptEndToEnd(api: string) {
       /name="manifest" value="([^"]+)"/.exec(page)![1]!.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&"),
     ) as Record<string, unknown>;
     assert.deepEqual(
-      [manifest.name, manifest.public, manifest.hook_attributes, manifest.redirect_url, manifest.setup_url, manifest.default_events],
-      ["marshal-factory-ski043", false, { url: "https://ingest.invalid/webhooks/github", active: true }, `${base}/callback`, `${base}/installed`, ["pull_request", "pull_request_review", "push", "issues"]],
+      [manifest.name, manifest.url, manifest.public, manifest.hook_attributes, manifest.redirect_url, manifest.setup_url, manifest.default_events],
+      ["marshal-factory-test", "https://github.com/test/marshal-factory", false, { url: "https://ingest.invalid/webhooks/github", active: true }, `${base}/callback`, `${base}/installed`, ["pull_request", "pull_request_review", "push", "issues"]],
     );
     assert.deepEqual(manifest.default_permissions, { metadata: "read", contents: "write", pull_requests: "write", checks: "write", issues: "write", statuses: "read" });
 
