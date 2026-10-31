@@ -187,6 +187,14 @@ tail -f ~/Library/Logs/marshal-factory/runner.log
 
 This installs the LaunchAgent `com.marshal-factory.runner`. It starts at login and restarts if it exits. Within a minute the log shows `realtime` `live` and a `heartbeat`, and your Mac appears under **Machines** in the panel. The runner still needs a repo to work in, which the next section adds.
 
+Then check the whole setup:
+
+```sh
+bun scripts/doctor.ts
+```
+
+It changes nothing. It checks the tools, `.env.local` (including a pasted token that wrapped onto a second line), the configs, the database and its migrations, ingest and its secret, the Linear key, team, label and webhook, the GitHub App, the Vercel environment, the panel, Neon Auth's trusted domain, the LaunchAgent, the runner's heartbeat and what **Run jobs on** needs. Each line that isn't `ok` says what fixes it, and it exits 1 when anything failed. Run it again whenever something stops working.
+
 ## Add your repo
 
 A target repo is any git repo whose `origin` is on GitHub and whose default branch is `main`. The GitHub App must be installed on it.
@@ -312,7 +320,8 @@ It waits for Vercel's production deploy (which runs the migrations), stops the r
 
 ## Troubleshooting
 
-- **Start with the runner log**: `~/Library/Logs/marshal-factory/runner.log`. Each line is one JSON event. Errors name the step that failed.
+- **Start with the doctor**: `bun scripts/doctor.ts` in the live checkout checks every part of the setup and names the fix for what's wrong.
+- **Then the runner log**: `~/Library/Logs/marshal-factory/runner.log`. Each line is one JSON event. Errors name the step that failed.
 - **An issue isn't picked up.** Check that it is in your team (`teamKey`), has the label, and is in an unstarted state such as Todo. Also check that **Repositories** lists at least one repo or `factory.repos` isn't empty, and that the Linear webhook exists under Linear → Settings → API. The runner also polls every 90 seconds, so a missed webhook only delays the job.
 - **Machine shows offline.** The runner isn't sending heartbeats. Check `launchctl list | grep marshal-factory`, then the log. Run `bun runner/index.ts --once` in the live checkout to do one pass by hand and see its output.
 - **Sign-up fails with "Invalid origin."** Neon Auth only accepts sign-ups from its trusted domains, and the panel's domain isn't one of them. Run `neon neon-auth domain add https://<your panel domain> --branch main`, then sign up again. See [the owner account steps](docs/operations.md#panel-access-and-deploys).
