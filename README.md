@@ -356,6 +356,7 @@ It waits for Vercel's production deploy (which runs the migrations), stops the r
 - **A run has no stages or costs.** The target repo's hooks aren't reaching ingest. Check that the files from `install-target` are on the repo's `main`, and that `FACTORY_INGEST_SECRET` in `.env.local` (or `secret` in your config, if it still has one) equals the Function's.
 - **You moved the live checkout.** The hooks and the LaunchAgent hold its old path. Run `install-target` for each repo and `install-runner` again.
 - **`install-runner` or `rollout` fails with "Command failed: /usr/bin/which t3."** That was an older installer on a Mac without a local T3 install. Pull `main` and run `bun scripts/install-runner.ts` again; it now warns and installs. After a failed rollout the runner stays stopped until you do.
+- **Repositories shows a repo as failed with "The image build was still running after 45 minutes, so the factory stopped it."** The runner never saw the warm-image build finish, for example because a rollout restarted it while the build ran. Until a new image lands, that repo's jobs run without a warm image (the runner logs `sandbox:warm-image-outdated`), so they clone and install from scratch. Press **Rebuild image** on the repo's Repositories entry; the image builds in a few minutes and the repo returns to Ready. See Freshness in [Onboarding a repository](docs/operations.md#onboarding-a-repository).
 
 ## Developing
 
