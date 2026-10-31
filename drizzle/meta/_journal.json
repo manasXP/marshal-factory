@@ -295,6 +295,13 @@
       "when": 1793407268033,
       "tag": "0041_queue_control",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1793413968907,
+      "tag": "0042_analytics_indexes",
+      "breakpoints": true
     }
   ]
 }

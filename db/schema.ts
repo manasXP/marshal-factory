@@ -91,7 +91,7 @@ export const runs = pgTable(
     model: text("model"),
     ...tokens(),
   },
-  (t) => [index("runs_last_event_at_idx").on(t.last_event_at)],
+  (t) => [index("runs_last_event_at_idx").on(t.last_event_at), index("runs_started_at_idx").on(t.started_at)],
 );
 
 export const agents = pgTable(
@@ -507,7 +507,7 @@ export const auditLog = pgTable(
     /** GitHub's message, or why the panel refused. */
     detail: text("detail"),
   },
-  (t) => [index("audit_log_job_at_idx").on(t.job_id, t.at)],
+  (t) => [index("audit_log_job_at_idx").on(t.job_id, t.at), index("audit_log_action_at_idx").on(t.action, t.at)],
 );
 
 export type EventRow = typeof events.$inferSelect;
