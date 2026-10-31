@@ -1,5 +1,5 @@
 {
-  "id": "605236fb-44b1-4922-b57f-7764f2b0667b",
+  "id": "8cff49f7-4b66-4136-9940-5569d04fb32e",
   "prevId": "97285ee7-6381-4523-bace-ffaff1c2427b",
   "version": "7",
   "dialect": "postgresql",
@@ -1628,6 +1628,21 @@
           "columns": [
             {
               "expression": "started_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "runs_job_key_idx": {
+          "name": "runs_job_key_idx",
+          "columns": [
+            {
+              "expression": "job_key",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
