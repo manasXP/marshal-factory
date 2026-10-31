@@ -14,6 +14,13 @@ const logPath = join(homedir(), "Library/Logs/marshal-factory/runner.log");
 const domain = `gui/${userInfo().uid}`;
 
 const which = (bin: string) => execFileSync("/usr/bin/which", [bin], { encoding: "utf8" }).trim();
+const whichOptional = (bin: string) => {
+  try {
+    return which(bin) || undefined;
+  } catch {
+    return undefined;
+  }
+};
 const launchctl = (...args: string[]) => execFileSync("/bin/launchctl", args, { encoding: "utf8", stdio: "pipe" });
 const loaded = () => {
   try {
@@ -34,7 +41,11 @@ if (process.argv.includes("--uninstall")) {
 const tools = ["bun", "git"].map(which);
 // T3 exports its CLI path only to sessions it starts; the daemon gets it from here.
 // T3 installs its launcher at ~/.t3/bin/t3 and puts it on the login shell's PATH; launchd has neither.
-const t3 = process.env.T3CODE_CLI_PATH ?? [join(homedir(), ".t3/bin/t3")].find(existsSync) ?? which("t3");
+// A runner whose jobs all run in a cloud sandbox needs no local T3, so a missing one is a warning.
+const t3 = process.env.T3CODE_CLI_PATH || [join(homedir(), ".t3/bin/t3")].find(existsSync) || whichOptional("t3");
+if (!t3) {
+  console.log("warning   no t3 CLI on this Mac: jobs can run only in a cloud sandbox (Modal or Upstash Box) until you install T3 Code and run this again");
+}
 const path = [...new Set([...tools.map(dirname), "/usr/bin", "/bin", "/usr/sbin", "/sbin"])].join(":");
 const escape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const plist = `<?xml version="1.0" encoding="UTF-8"?>
@@ -49,8 +60,7 @@ const plist = `<?xml version="1.0" encoding="UTF-8"?>
   <dict>
     <key>PATH</key><string>${escape(path)}</string>
     <key>HOME</key><string>${escape(homedir())}</string>
-    <key>T3CODE_CLI_PATH</key><string>${escape(t3)}</string>
-  </dict>
+${t3 ? `    <key>T3CODE_CLI_PATH</key><string>${escape(t3)}</string>\n` : ""}  </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>10</integer>
