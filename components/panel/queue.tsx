@@ -32,7 +32,7 @@ const REFRESH_MS = 20_000;
 
 type Pause = { at: Date; by: string } | null;
 
-/** Refreshes the page when a claim or launch changes the jobs, and every REFRESH_MS for the backlog. */
+/** Refreshes the page when a claim or launch changes the jobs, and every REFRESH_MS for the backlog while the tab is shown. */
 function useQueueRefresh(jobs: Feed<JobRow>) {
   const router = useRouter();
   const { rows, status } = useFeed(jobs, "/api/live/jobs");
@@ -47,7 +47,9 @@ function useQueueRefresh(jobs: Feed<JobRow>) {
     router.refresh();
   }, [signature, router]);
   useEffect(() => {
-    const id = setInterval(() => router.refresh(), REFRESH_MS);
+    const id = setInterval(() => {
+      if (!document.hidden) router.refresh();
+    }, REFRESH_MS);
     return () => clearInterval(id);
   }, [router]);
   return status;

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, eq, inArray, isNull, lt, ne, notInArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "@/db/schema";
 import { auditLog, backlog, intents, jobs, queueControls, queueState, type QueueControlRow } from "@/db/schema";
@@ -16,7 +16,10 @@ export const QUEUE_STATE_ID = "factory";
 
 type Db = NodePgDatabase<typeof schema>;
 
-export async function readPause(database: Db) {
+/** Anything that reads like the database, a transaction included. */
+type Reader = Pick<Db, "select">;
+
+export async function readPause(database: Reader) {
   const [row] = await database.select().from(queueState).where(eq(queueState.id, QUEUE_STATE_ID));
   return row?.paused_at ? { at: row.paused_at, by: row.updated_by } : null;
 }
@@ -25,9 +28,12 @@ export const readQueueControls = (database: Db): Promise<QueueControlRow[]> => d
 
 export const heldIds = (controls: readonly QueueControlRow[]) => new Set<string>(controls.filter((c) => c.held_at).map((c) => c.job_id));
 
+const frontTimes = (controls: readonly QueueControlRow[]) =>
+  new Map<string, number>(controls.flatMap((c) => (c.front_at ? [[c.job_id, c.front_at.getTime()] as const] : [])));
+
 /** Queued work in the order it starts: moved to the front first, the latest move leading, then each in its own order. */
 export function inQueueOrder<T>(items: readonly T[], idOf: (item: T) => string, controls: readonly QueueControlRow[]): T[] {
-  const front = new Map<string, number>(controls.flatMap((c) => (c.front_at ? [[c.job_id, c.front_at.getTime()] as const] : [])));
+  const front = frontTimes(controls);
   return items
     .map((item, index) => ({ item, index, front: front.get(idOf(item)) ?? -Infinity }))
     .sort((a, b) => (a.front === b.front ? a.index - b.index : b.front - a.front))
@@ -49,46 +55,51 @@ export const unlaunchedSql = and(eq(jobs.stage, "queued"), isNull(jobs.t3_thread
 /** True for a job id the owner holds back; capacity counts leave such a job out, since it will not launch. */
 export const heldSql = sql`exists (select 1 from ${queueControls} where ${queueControls.job_id} = ${jobs.id} and ${queueControls.held_at} is not null)`;
 
+/** True while new work is paused; the launch's compare-and-set reads it, so a pause lands mid-pass. */
+export const pausedSql = sql`exists (select 1 from ${queueState} where ${queueState.paused_at} is not null)`;
+
+/** A control outlives a source that stops offering its item for a while (Linear lists 50), then goes. */
+const STALE_CONTROL_MS = 7 * 86_400_000;
+
 export type BacklogEntry = { id: JobId; source: JobSource; externalId: string; key: string; title: string; url: string; repo: string | null };
 
 /**
- * Replaces the backlog of the sources this pass read with what they offer that no runner holds: an
- * item with no job yet, or with a failed one its label asks to retry. A source whose read failed
- * keeps its rows. Controls for work that has left the queue, launched or gone, are dropped.
+ * Replaces the backlog of the sources this pass read with what they offer that no runner can claim
+ * yet; the caller leaves out what a runner holds. Each item keeps its place in its own source's
+ * order. A source whose read failed keeps its rows, and an unchanged row is not written. Controls go
+ * once their job has started or ended, or when nothing has offered or queued their work for a week.
  */
-export async function recordBacklog(database: Db, read: readonly JobSource[], offered: readonly BacklogEntry[], at: Date) {
+export async function recordBacklog(database: Db, read: readonly JobSource[], waiting: readonly BacklogEntry[], at: Date) {
   await database.transaction(async (tx) => {
-    const ids = offered.map((o) => o.id);
-    const taken = new Set(
-      ids.length === 0 ? [] : (await tx.select({ id: jobs.id }).from(jobs).where(and(inArray(jobs.id, ids), ne(jobs.stage, "failed")))).map((j) => j.id),
+    const rows = read.flatMap((source) =>
+      waiting
+        .filter((w) => w.source === source)
+        .map(({ externalId, ...w }, position) => ({ ...w, external_id: externalId, position, first_seen_at: at })),
     );
-    const rows = offered
-      .map((o, position) => ({ ...o, position }))
-      .filter((o) => !taken.has(o.id))
-      .map(({ externalId, ...o }) => ({ ...o, external_id: externalId, first_seen_at: at, seen_at: at }));
     if (rows.length > 0) {
+      const changed = sql`(${backlog.key}, ${backlog.title}, ${backlog.url}, ${backlog.repo}, ${backlog.position}) is distinct from (excluded.key, excluded.title, excluded.url, excluded.repo, excluded.position)`;
       await tx
         .insert(backlog)
         .values(rows)
         .onConflictDoUpdate({
           target: backlog.id,
-          set: {
-            key: sql`excluded.key`,
-            title: sql`excluded.title`,
-            url: sql`excluded.url`,
-            repo: sql`excluded.repo`,
-            position: sql`excluded.position`,
-            seen_at: sql`excluded.seen_at`,
-          },
+          set: { key: sql`excluded.key`, title: sql`excluded.title`, url: sql`excluded.url`, repo: sql`excluded.repo`, position: sql`excluded.position` },
+          setWhere: changed,
         });
     }
-    if (read.length > 0) await tx.delete(backlog).where(and(inArray(backlog.source, [...read]), lt(backlog.seen_at, at)));
+    const ids = rows.map((r) => r.id);
+    if (read.length > 0) await tx.delete(backlog).where(and(inArray(backlog.source, [...read]), ids.length > 0 ? notInArray(backlog.id, ids) : undefined));
+    const queued = tx.select({ id: jobs.id }).from(jobs).where(eq(jobs.stage, "queued"));
     await tx
       .delete(queueControls)
       .where(
-        and(
-          notInArray(queueControls.job_id, tx.select({ id: backlog.id }).from(backlog)),
-          notInArray(queueControls.job_id, tx.select({ id: jobs.id }).from(jobs).where(unlaunchedSql)),
+        or(
+          inArray(queueControls.job_id, tx.select({ id: jobs.id }).from(jobs).where(notInArray(jobs.stage, ["queued", "failed"]))),
+          and(
+            lt(queueControls.updated_at, new Date(at.getTime() - STALE_CONTROL_MS)),
+            notInArray(queueControls.job_id, tx.select({ id: backlog.id }).from(backlog)),
+            notInArray(queueControls.job_id, queued),
+          ),
         ),
       );
   });
@@ -109,8 +120,8 @@ export type QueueItem = {
   held: boolean;
 };
 
-/** The pause and the queue in the order work starts: claimed jobs first, then the backlog. */
-export async function readQueue(database: Db) {
+/** The pause and the queue in the order work starts: claimed jobs first, then the backlog, by source in the order claims read them. */
+export async function readQueue(database: Db, sourceOrder: readonly JobSource[]) {
   const [pause, controls, claimed, waiting] = await Promise.all([
     readPause(database),
     readQueueControls(database),
@@ -122,10 +133,13 @@ export async function readQueue(database: Db) {
     database.select().from(backlog).orderBy(asc(backlog.position), asc(backlog.key)),
   ]);
   const held = heldIds(controls);
+  const front = frontTimes(controls);
+  const rank = (source: string) => (sourceOrder.includes(source as JobSource) ? sourceOrder.indexOf(source as JobSource) : sourceOrder.length);
+  waiting.sort((a, b) => rank(a.source) - rank(b.source));
   const item = (claimedJob: boolean) => (r: Omit<QueueItem, "claimed" | "front" | "held">): QueueItem => ({
     ...r,
     claimed: claimedJob,
-    front: controls.some((c) => c.job_id === r.id && c.front_at),
+    front: front.has(r.id),
     held: held.has(r.id),
   });
   const byId = (i: QueueItem) => i.id;
@@ -133,7 +147,11 @@ export async function readQueue(database: Db) {
     pause,
     items: [
       ...inQueueOrder(claimed.map((r) => item(true)({ ...r, id: r.id as JobId, source: r.source as JobSource })), byId, controls),
-      ...inQueueOrder(waiting.map((r) => item(false)({ id: r.id, source: r.source, key: r.key, title: r.title, url: r.url, repo: r.repo, since: r.first_seen_at })), byId, controls),
+      ...inQueueOrder(
+        waiting.map((r) => item(false)({ id: r.id, source: r.source, key: r.key, title: r.title, url: r.url, repo: r.repo, since: r.first_seen_at })),
+        byId,
+        controls,
+      ),
     ],
   };
 }
@@ -199,9 +217,16 @@ export async function changeQueue(deps: QueueDeps, jobId: string, change: QueueC
     }
   }
   await deps.db.transaction(async (tx) => {
-    if (change === "remove") {
+    if (change === "remove" && !claimed) {
       await tx.delete(backlog).where(eq(backlog.id, item.id));
       await tx.delete(queueControls).where(eq(queueControls.job_id, item.id));
+    } else if (change === "remove") {
+      // The stop reaches the runner after this; held meanwhile, the job cannot start before it does.
+      const set = { held_at: at };
+      await tx
+        .insert(queueControls)
+        .values({ job_id: item.id, ...set, updated_at: at, updated_by: user!.email })
+        .onConflictDoUpdate({ target: queueControls.job_id, set: { ...set, updated_at: at, updated_by: user!.email } });
     } else {
       const set = change === "front" ? { front_at: at } : { held_at: change === "hold" ? at : null };
       await tx

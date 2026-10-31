@@ -1,5 +1,5 @@
 {
-  "id": "f0080a01-a815-4ce6-a42f-88951029955f",
+  "id": "97285ee7-6381-4523-bace-ffaff1c2427b",
   "prevId": "7aa99bb7-53b7-402a-afd9-e6f90ac121ac",
   "version": "7",
   "dialect": "postgresql",
@@ -276,12 +276,6 @@
         },
         "first_seen_at": {
           "name": "first_seen_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "seen_at": {
-          "name": "seen_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true

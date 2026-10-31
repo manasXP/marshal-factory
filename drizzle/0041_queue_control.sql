@@ -8,8 +8,7 @@ CREATE TABLE "backlog" (
 	"url" text NOT NULL,
 	"repo" text,
 	"position" integer NOT NULL,
-	"first_seen_at" timestamp with time zone NOT NULL,
-	"seen_at" timestamp with time zone NOT NULL
+	"first_seen_at" timestamp with time zone NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "queue_controls" (

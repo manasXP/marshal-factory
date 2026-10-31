@@ -383,10 +383,9 @@ export const backlog = pgTable("backlog", {
   url: text("url").notNull(),
   /** Where the claim would route it. */
   repo: text("repo"),
-  /** Its place in the source's own order, in the pass that saw it last. */
+  /** Its place in its source's own order, in the pass that saw it last. */
   position: integer("position").notNull(),
   first_seen_at: ts("first_seen_at").notNull(),
-  seen_at: ts("seen_at").notNull(),
 });
 
 /**

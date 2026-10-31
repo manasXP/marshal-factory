@@ -6,12 +6,13 @@ import { db } from "@/db/client";
 import { jobsQuery, load } from "@/lib/live-queries";
 import { readQueue } from "@/lib/queue";
 import { readRegistry } from "@/lib/repositories";
+import { allSources } from "@/lib/sources";
 
 async function Panel() {
   await connection();
   // load checks the owner before anything is read.
   const jobs = await load(jobsQuery());
-  const [{ pause, items }, registry] = await Promise.all([readQueue(db), readRegistry(db)]);
+  const [{ pause, items }, registry] = await Promise.all([readQueue(db, allSources().map((s) => s.source)), readRegistry(db)]);
   return <Queue jobs={jobs} pause={pause} items={items} registry={registry.map((r) => ({ repo: r.repo, display_name: r.display_name }))} />;
 }
 

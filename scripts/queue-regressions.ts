@@ -115,7 +115,7 @@ const deps = {
     dequeued.push(`${source}:${externalId}`);
   },
 };
-const queueKeys = async () => (await readQueue(db)).items.filter((i) => i.source === (SOURCE as never)).map((i) => [i.key, i.claimed, i.front, i.held]);
+const queueKeys = async () => (await readQueue(db, [SOURCE as never])).items.filter((i) => i.source === (SOURCE as never)).map((i) => [i.key, i.claimed, i.front, i.held]);
 const k = (n: number) => items[n - 1]!.key;
 const maxInFlight = ops.config.factory.maxInFlight;
 
@@ -137,7 +137,7 @@ try {
     [1, 2, 3].map((n) => [k(n), false, false, false]),
     "and records what the source offers as the backlog, in the source's order",
   );
-  assert.equal((await readQueue(db)).pause?.by, OWNER, "the queue says who paused");
+  assert.equal((await readQueue(db, [])).pause?.by, OWNER, "the queue says who paused");
 
   const gone = await changeQueue(deps, `${SOURCE}:nope`, "front");
   assert.match(gone.ok ? "" : gone.message, /no longer queued/, "work that is not queued can't be changed");
@@ -161,7 +161,7 @@ try {
   const openClaims = async () => (await db.select().from(intents).where(and(like(intents.id, "panel:claim:%"), eq(intents.kind, "claim")))).length;
   const before = await openClaims();
   assert.deepEqual(await setPaused(deps, false), { ok: true });
-  assert.equal((await readQueue(db)).pause, null, "resumed");
+  assert.equal((await readQueue(db, [])).pause, null, "resumed");
   assert.equal(await openClaims(), before + 1, "a resume asks the runners for a claim pass at once");
 
   ops.config.factory.maxInFlight = 2;
@@ -182,11 +182,19 @@ try {
   await changeQueue(deps, idOf(2), "hold");
   assert.deepEqual((await claim()).claimed, [k(1)], "holding a claimed job frees its room");
 
-  // A launched job has left the queue; its control goes with the next pass.
-  await db.update(jobs).set({ t3_thread_id: "thread-x", machine_id: "test-machine" }).where(eq(jobs.id, idOf(3)));
+  // The launch's compare-and-set reads the hold and the pause itself, so one set mid-pass still holds.
+  const slot = { id: "test-machine", repos: [REPO], maxInFlight: 10 };
+  assert.equal(await ops.claimLaunch(k(2), "pending:held", slot), false, "a held job is not launched");
+  await setPaused(deps, true);
+  assert.equal(await ops.claimLaunch(k(1), "pending:paused", slot), false, "nor any queued job while paused");
+  await setPaused(deps, false);
+
+  // A started job has left the queue; its control goes with the next pass.
+  assert.equal(await ops.claimLaunch(k(3), "pending:go", slot), true, "an unheld job launches once resumed");
+  await db.update(jobs).set({ stage: "triage" }).where(eq(jobs.id, idOf(3)));
   await claim();
   const controls = await db.select().from(queueControls).where(inArray(queueControls.job_id, [idOf(1), idOf(2), idOf(3)]));
-  assert.deepEqual(controls.map((c) => c.job_id).sort(), [idOf(1), idOf(2)], "the launched job's control is gone, the queued ones' stay");
+  assert.deepEqual(controls.map((c) => c.job_id).sort(), [idOf(1), idOf(2)], "the started job's control is gone, the queued ones' stay");
 
   // A source whose read fails keeps its backlog.
   ready = [...items];
@@ -207,7 +215,9 @@ try {
   assert.deepEqual(await changeQueue(deps, idOf(2), "remove"), { ok: true }, "a claimed job can be removed too");
   assert.deepEqual(dequeued, [`${SOURCE}:${items[3]!.externalId}`, `${SOURCE}:${items[1]!.externalId}`], "each removed at its source");
   assert.equal((await db.select().from(backlog).where(eq(backlog.id, idOf(4)))).length, 0, "and out of the backlog at once");
-  assert.equal((await db.select().from(queueControls).where(eq(queueControls.job_id, idOf(2)))).length, 0, "with its control");
+  assert.equal((await db.select().from(queueControls).where(eq(queueControls.job_id, idOf(4)))).length, 0, "with its control");
+  const [kept] = await db.select().from(queueControls).where(eq(queueControls.job_id, idOf(2)));
+  assert.ok(kept?.held_at, "a removed claimed job stays held until its stop lands, so it can't start first");
 
   console.log("queue regressions passed");
 } catch (error) {

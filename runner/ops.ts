@@ -21,7 +21,7 @@ import { readSettings, resolveExecution, resolveHarness, type HarnessChoice } fr
 import type { Execution } from "../lib/execution";
 import type { TicketRecord } from "../lib/ticket-overrides";
 import { readRegistry, registerRepos, routeRepo, type Registry } from "../lib/repositories";
-import { heldIds, heldSql, inQueueOrder, readPause, readQueueControls, recordBacklog } from "../lib/queue";
+import { heldIds, heldSql, inQueueOrder, pausedSql, readPause, readQueueControls, recordBacklog } from "../lib/queue";
 import { ensureAwake, HostGoneError, hosts, isHibernated, WakeDeferredError, type JobHost } from "../lib/host";
 import { requestedStop } from "../lib/stop";
 import { bindingOf, canReclaimSql, heldStoppingSql, isStopped, PENDING, stopDeliverableSql, stoppingSql } from "./binding";
@@ -612,16 +612,20 @@ export async function claim({
   const held = heldIds(controls);
   const idOf = ({ source, draft }: (typeof ready)[number]) => jobId(source.source, draft.externalId);
   const claimable = paused ? [] : inQueueOrder(ready, idOf, controls).filter((r) => !held.has(idOf(r)));
+  const known = await registry();
   const claimed = paused
     ? { claimed: [] as string[], inFlight: 0, paused: true }
     : claimable.length === 0
       ? { claimed: [] as string[], inFlight: 0 }
-      : await claimDrafts(claimable, repos, registry);
-  const known = await registry();
+      : await claimDrafts(claimable, repos, known);
+  // What a runner holds, or a failed job the claim can't take back yet, is not waiting to be claimed.
+  const ids = ready.map(idOf);
+  const holding = ids.length === 0 ? [] : await db.select({ id: jobs.id }).from(jobs).where(and(inArray(jobs.id, ids), sql`not ${canReclaimSql}`));
+  const taken = new Set<string>(holding.map((j) => j.id));
   await recordBacklog(
     db,
     read,
-    ready.map(({ source, draft }) => ({
+    ready.filter((r) => !taken.has(idOf(r))).map(({ source, draft }) => ({
       id: jobId(source.source, draft.externalId),
       source: source.source,
       externalId: draft.externalId,
@@ -636,8 +640,8 @@ export async function claim({
   return claimed;
 }
 
-async function claimDrafts(ready: readonly { source: SourceAdapter<JobSource>; draft: JobDraft }[], repos: () => Promise<string[]>, registry: () => Promise<Registry>) {
-  const [checkouts, known] = await Promise.all([repos(), registry()]);
+async function claimDrafts(ready: readonly { source: SourceAdapter<JobSource>; draft: JobDraft }[], repos: () => Promise<string[]>, known: Registry) {
+  const checkouts = await repos();
   const targets = [...new Set([...checkouts, ...known.filter((r) => r.enabled).map((r) => r.repo)])];
   if (targets.length === 0) throw new Error("no repository is registered and factory.repos is empty, so there is no repository to claim work for");
   const targetOf = (source: SourceAdapter<JobSource>, draft: JobDraft) => routeRepo(source.overrides(draft.sourceState), known).repo ?? checkouts[0] ?? targets[0]!;
@@ -647,6 +651,8 @@ async function claimDrafts(ready: readonly { source: SourceAdapter<JobSource>; d
   return db.transaction(async (tx) => {
     // The lock's name predates other sources; runners on older code take the same one.
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext('marshal-factory linear-poll'))`);
+    // A pause that landed since the claim pass read it is honored here, under the lock.
+    if (await readPause(tx)) return { claimed: [] as string[], inFlight: 0, paused: true };
     const [{ count }] = await tx
       .select({ count: sql<number>`count(*)::int` })
       .from(jobs)
@@ -957,7 +963,8 @@ export async function launchSettings() {
 
 /**
  * Marks a queued job as being launched by this machine, as one compare-and-set: false when another
- * launch or machine holds the job, the machine has no checkout of its repo, or the machine is full.
+ * launch or machine holds the job, the machine has no checkout of its repo, the machine is full, or
+ * the owner held the queued job or paused new work.
  * The capacity count is read in the same statement, which holds because one machine runs one
  * runner and its launches run one at a time. The harness, where it runs and the ticket's overrides
  * are recorded with the marker, so a launch that launch recovery binds later still says what it ran on.
@@ -987,6 +994,8 @@ export async function claimLaunch(
         isNull(jobs.machine_id),
         inArray(jobs.repo, [...machine.repos]),
         sql`(select count(*) from jobs held where held.machine_id = ${machine.id} and (held.stage in (${working}) or ${heldStoppingSql})) < ${machine.maxInFlight}`,
+        // A hold or a pause set while this pass ran still stops a queued job; an answered job relaunches regardless.
+        sql`(${jobs.stage} <> 'queued' or not (${heldSql} or ${pausedSql}))`,
       ),
     )
     .returning({ key: jobs.key });

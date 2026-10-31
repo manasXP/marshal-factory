@@ -235,7 +235,8 @@ export async function launchQueued(onWorktree: (check: Record<string, unknown>) 
   if (repos.length === 0) return [];
   const recovered = await recoverPending(checkouts);
   const machine = await thisMachine();
-  if ((await machineInFlight(machine.id)) >= config.factory.maxInFlight) return recovered;
+  const inFlight = await machineInFlight(machine.id);
+  if (inFlight >= config.factory.maxInFlight) return recovered;
   const [paused, controls] = await Promise.all([readPause(db), readQueueControls(db)]);
   const queued = launchable((await toLaunch()).filter((entry) => repos.includes(entry.repo)), Boolean(paused), controls);
   if (queued.length === 0) return recovered;
@@ -279,7 +280,8 @@ export async function launchQueued(onWorktree: (check: Record<string, unknown>) 
   if (noCheckout.length > 0) overrideRuntime.log("repo:no-checkout", { modal: noCheckout });
   const jobs = new Map(queued.map((q) => [q.key, q.job]));
   const claimed: Claimed = (entry) => announceFallbacks(jobs.get(entry.key)!, entry.ticket);
-  const { local, modal, upstash } = splitByExecution(planned);
+  // Only what the machine has room for, in queue order, so work behind on another backend can't take a front job's place.
+  const { local, modal, upstash } = splitByExecution(planned.slice(0, config.factory.maxInFlight - inFlight));
   return [
     ...recovered,
     ...(local.length > 0 ? await launchLocal(local, checkouts, slot, claimed, onWorktree) : []),
