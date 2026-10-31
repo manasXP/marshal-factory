@@ -201,40 +201,47 @@ const startupReconcile = () => reconcile({ tick, cleanup: () => ops.cleanup(), l
  */
 async function tick() {
   // Each check on its own: one failing (a source or GitHub down) must not skip the others this tick.
+  // Each step's wall time goes in `ms`, so a slow tick shows which step it waited on.
+  const ms: Record<string, number> = {};
+  const timed = <T>(name: string, step: () => Promise<T>) => {
+    const started = Date.now();
+    return isolated(step).finally(() => (ms[name] = Date.now() - started));
+  };
   return {
     // First, so stage reports a hook or MCP call could not deliver reach the board before anything reads it.
-    outbox: await isolated(flushLocalOutbox),
-    claimed: await isolated(() => ops.claim()),
+    outbox: await timed("outbox", flushLocalOutbox),
+    claimed: await timed("claimed", () => ops.claim()),
     // An answer can land before its question reached the source, and its intent then finds nothing.
-    resumed: await isolated(ops.resumeAnswered),
+    resumed: await timed("resumed", ops.resumeAnswered),
     // Stops whose webhook never arrived; before deliverStops, so a new stop is messaged this tick.
-    stopsReconciled: await isolated(() => ops.reconcileStops()),
-    stopsDelivered: await isolated(() => ops.deliverStops()),
-    pullRequests: await isolated(ops.checkPullRequests),
+    stopsReconciled: await timed("stopsReconciled", () => ops.reconcileStops()),
+    stopsDelivered: await timed("stopsDelivered", () => ops.deliverStops()),
+    pullRequests: await timed("pullRequests", ops.checkPullRequests),
     // Before the merge decisions, so a run that just opened its PR is decided on its latest cost.
-    reconciled: await isolated(ops.reconcileUsage),
+    reconciled: await timed("reconciled", ops.reconcileUsage),
     // After the usage reconcile, so the spend it compares with each limit is this tick's.
-    spendLimits: await isolated(() => ops.enforceSpendLimits()),
+    spendLimits: await timed("spendLimits", () => ops.enforceSpendLimits()),
     // After the PR check, so a merged or conflicting PR has already left pr.
-    mergeDecisions: await isolated(() => decideMerges()),
-    mainWatched: await isolated(() => watchMerges()),
+    mergeDecisions: await timed("mergeDecisions", () => decideMerges()),
+    mainWatched: await timed("mainWatched", () => watchMerges()),
     // Harnesses without hooks report no stage or PR; read them from GitHub and the thread instead.
-    untracked: await isolated(() => inferUntracked()),
-    watched: await isolated(ops.watchdog),
+    untracked: await timed("untracked", () => inferUntracked()),
+    watched: await timed("watched", ops.watchdog),
     // After the stops and the PR check, so a finished job gives its slot back before this tick's launches.
-    sandboxes: await isolated(tickSandboxes),
+    sandboxes: await timed("sandboxes", tickSandboxes),
     // After teardown, which records a stopped sandbox's end; a confirmed stop frees its capacity before this tick's launches.
-    stopsConfirmed: await isolated(() => confirmStops()),
-    pairingsExpired: await isolated(expirePairings),
-    synced: await isolated(writeBackPass),
+    stopsConfirmed: await timed("stopsConfirmed", () => confirmStops()),
+    pairingsExpired: await timed("pairingsExpired", expirePairings),
+    synced: await timed("synced", writeBackPass),
     // Starts a rebuild when the pins drifted and returns; the build runs beside the queue.
-    baseImage: await isolated(async () =>
+    baseImage: await timed("baseImage", async () =>
       rebuildBaseImage({
         changed: () => void beat({ fresh: true }),
         // Queued Modal jobs would otherwise wait for the next tick.
         landed: () => void serial("launch", launchAndAnnounce),
       }),
     ),
+    ms,
   };
 }
 
