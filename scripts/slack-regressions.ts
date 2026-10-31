@@ -17,7 +17,7 @@ const { db } = await import("../db/client");
 const { intents, jobs, notificationSettings, runs, slackMessages } = await import("../db/schema");
 const { linearJob, usageRun } = await import("./fixtures");
 const { inQuietHours, notificationConfigSchema, NOTIFICATIONS_ID, parseNotificationConfig, requestSlackTest, saveNotifications, slackTestOutcome, DEFAULT_NOTIFICATIONS } = await import("../lib/notifications");
-const { eventId, NOTIFY_WINDOW_MS, notifyEvents, redact, renderMessage, resolution, SLACK_ACTION_IDS } = await import("../lib/slack");
+const { eventId, NOTIFY_WINDOW_MS, notifyEvents, panelUrl, redact, renderMessage, resolution, SLACK_ACTION_IDS } = await import("../lib/slack");
 const { slackClient } = await import("../lib/slack-api");
 const { notifySlack, POSTING_STALE_MS, sendSlackTest, slackFromEnv } = await import("../runner/slack");
 const { deliveryFor, INTENT_ATTEMPTS, INTENT_ROUTES } = await import("../runner/intents");
@@ -105,6 +105,9 @@ const track = async (n: string, over: Partial<typeof jobs.$inferInsert>) => {
 
 try {
   // --- pure rules
+  assert.equal(panelUrl({ FACTORY_PANEL_URL: "https://factory.example.com/", VERCEL_PROJECT_PRODUCTION_URL: "p.vercel.app" }), "https://factory.example.com", "the setting wins, without a trailing slash");
+  assert.equal(panelUrl({ VERCEL_PROJECT_PRODUCTION_URL: "p.vercel.app" }), "https://p.vercel.app", "on Vercel, the production domain");
+  assert.equal(panelUrl({ FACTORY_PANEL_URL: "" }), "https://marshal-factory.vercel.app", "an empty setting falls back");
   assert.deepEqual(parseNotificationConfig(null), DEFAULT_NOTIFICATIONS, "no row means a DM to the owner about everything");
   assert.equal(DEFAULT_NOTIFICATIONS.target, "owner");
   assert.ok(Object.values(DEFAULT_NOTIFICATIONS.events).every(Boolean));

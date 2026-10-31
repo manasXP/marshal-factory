@@ -50,10 +50,11 @@ bun install
 
 Fork the repo first if you want Vercel to deploy your copy. This checkout is the **live checkout**. The runner, and the hooks installed into your target repos, run code straight from this path. Keep it on `main` and don't move it. Do development work in a separate clone or worktree.
 
-### 2. Know the two values tied to your setup
+### 2. Know the three values tied to your setup
 
 - The GitHub App's name. GitHub App names are unique across GitHub, so `scripts/setup-github-app.ts` names it after your fork's owner, `marshal-factory-<owner>`, with your fork as its URL. Pass `--name` (and `--url`) at step 6 to pick others.
 - The production database endpoint, `FACTORY_PRODUCTION_ENDPOINTS`, so a preview build can never migrate production. You note it at step 4 and give it to Vercel at step 8.
+- The panel's URL, `FACTORY_PANEL_URL`: `https://<project>.vercel.app` for the Vercel project you create at step 8, or your own domain. Neon Realtime and Neon Auth trust it, and Slack messages link to it. You set it in `.env.local` at step 4. The deployed panel reads its production domain from Vercel, so Vercel needs it only for a custom domain.
 
 ### 3. Prepare Linear
 
@@ -87,6 +88,7 @@ FACTORY_OWNER_EMAILS=you@example.com
 LINEAR_API_KEY=<your Linear API key>
 FACTORY_TEAM_KEY=FAC
 FACTORY_LABEL=factory
+FACTORY_PANEL_URL=https://<project>.vercel.app
 EOF
 chmod 600 .env.local
 ```
@@ -170,11 +172,13 @@ Import the repo into Vercel as a Next.js project. `vercel.json` already sets the
   - Optional: `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET` and `SLACK_OWNER_USER_ID` ([Connecting Slack](#connecting-slack))
 - Set the Ignored Build Step to `[ -z "$DATABASE_URL" ]`, so previews without a database are skipped. To get previews with their own Neon branch, connect Neon's Vercel integration. Each preview then migrates its own branch, and the migration guard stops any preview that points at production.
 
-Deploy, then add the panel's production URL to Neon Auth's trusted domains; the example uses `https://marshal-factory.vercel.app`, so put your own domain in its place. A new branch has none, and without this sign-up fails with "Create account failed: Invalid origin.":
+Deploy, then add the panel's URL to Neon Auth's trusted domains. A new branch has none, and without this sign-up fails with "Create account failed: Invalid origin.":
 
 ```sh
-neon neon-auth domain add https://marshal-factory.vercel.app --branch main
+neon neon-auth domain add "$(grep '^FACTORY_PANEL_URL=' .env.local | cut -d= -f2-)" --branch main
 ```
+
+If the URL Vercel gave the panel differs from `FACTORY_PANEL_URL`, fix it in `.env.local` and run the `neon deploy` command from step 4 again, with the real webhook secret from step 6 in place of `pending`, so Realtime trusts the right origin.
 
 Then create your owner account. Sign-up is off by default. The [owner account steps](docs/operations.md#panel-access-and-deploys) turn it on briefly, so you can register with an address from `FACTORY_OWNER_EMAILS` and confirm it with the emailed code.
 
@@ -293,7 +297,7 @@ Upstash Box is a second cloud for jobs, beside Modal. Add `UPSTASH_BOX_API_KEY=<
 
 Optional. With Slack connected, the runner messages you when a job needs you or the factory merges or reverts on its own, and edits the message once it's resolved. The messages carry the Inbox's buttons (**Approve and merge**, **Request changes**, **Answer**, **Close**, **Dismiss**), and `/factory` or the **Send to factory** message shortcut files new jobs. Only your own Slack account can act.
 
-1. Create the app at [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From a manifest**, with the manifest in [docs/operations.md](docs/operations.md#slack-notifications), then install it to your workspace. Change the panel URL in it if yours isn't `marshal-factory.vercel.app`.
+1. Create the app at [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From a manifest**, with the manifest in [docs/operations.md](docs/operations.md#slack-notifications), then install it to your workspace. Put your `FACTORY_PANEL_URL` in place of `https://marshal-factory.vercel.app` in its two URLs.
 2. Add three values to `.env.local` in the live checkout: `SLACK_BOT_TOKEN` (**OAuth & Permissions** → Bot User OAuth Token), `SLACK_SIGNING_SECRET` (**Basic Information** → App Credentials) and `SLACK_OWNER_USER_ID` (your Slack profile → ⋯ → **Copy member ID**).
 3. Add the same three to the panel's Vercel environment for Production, redeploy, and restart the runner (`bun scripts/install-runner.ts --uninstall && bun scripts/install-runner.ts`).
 4. In the panel's **Settings** → **Notifications**, pick your DMs or a channel, the events you want and optional quiet hours, then **Send test message**.

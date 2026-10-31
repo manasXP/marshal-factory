@@ -1,10 +1,11 @@
 import { defineConfig } from "@neon/config/v1";
 import { readAppFile } from "./lib/github/app";
+import { panelUrl } from "./lib/panel-url";
 
 export default defineConfig({
   auth: true,
   // Browsers may only open live feeds from the panel itself; sealed queries are still owner-only.
-  preview: { realtime: { allowedOrigins: ["https://marshal-factory.vercel.app", "http://localhost:3007"] } },
+  preview: { realtime: { allowedOrigins: [panelUrl(), "http://localhost:3007"] } },
   functions: {
     ingest: {
       name: "factory ingest",

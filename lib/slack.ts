@@ -267,7 +267,7 @@ export type MessageFacts = {
 
 const usd = (spend: NonNullable<MessageFacts["spend"]>) => `$${spend.usd.toFixed(2)}${spend.known ? "" : "+"}`;
 
-export const panelUrl = () => (process.env.FACTORY_PANEL_URL ?? "https://marshal-factory.vercel.app").replace(/\/+$/, "");
+export { panelUrl } from "./panel-url";
 
 /** Environment variables whose values must never reach Slack, whatever an agent writes. */
 const SECRET_NAME = /(TOKEN|SECRET|PASSWORD|PRIVATE_KEY|API_KEY|DATABASE_URL)/i;
