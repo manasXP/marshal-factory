@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpus, hostname, loadavg, totalmem } from "node:os";
+import { readFile } from "node:fs/promises";
+import { cpus, hostname, loadavg, platform, totalmem } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { eq } from "drizzle-orm";
@@ -49,6 +50,20 @@ export function parseVmStat(output: string, totalBytes: number) {
   return { usedBytes, totalBytes };
 }
 
+/** Linux counts MemAvailable as what it can hand out without swapping, so memory in use is the rest. */
+export function parseMeminfo(output: string) {
+  const bytes = (name: string) => {
+    const kb = new RegExp(`^${name}:\\s+(\\d+) kB$`, "m").exec(output)?.[1];
+    if (kb === undefined) throw new Error(`/proc/meminfo has no ${name} line`);
+    return Number(kb) * 1024;
+  };
+  const totalBytes = bytes("MemTotal");
+  const usedBytes = totalBytes - bytes("MemAvailable");
+  if (!(totalBytes > 0) || usedBytes < 0) throw new Error("/proc/meminfo reports more available memory than the machine has");
+  return { usedBytes, totalBytes };
+}
+
+/** Expects the POSIX table (`df -k` on macOS, `df -kP` on Linux), whose header says 1024-blocks. */
 export function parseDf(output: string) {
   const [header, row] = output.trim().split("\n");
   if (!header?.startsWith("Filesystem") || !header.includes("1024-blocks") || !row) throw new Error("df output has no 1024-blocks table");
@@ -64,11 +79,14 @@ export type InventoryCollectors = { [K in keyof Inventory]-?: () => Promise<Inve
 
 const settle = <T>(collect: () => Promise<T>) => collect().catch((): typeof UNKNOWN => UNKNOWN);
 
+/** macOS under the LaunchAgent, Linux in the runner container (docs/runner-container.md). */
+const linux = platform() === "linux";
+
 export function systemCollectors(capacity: () => Promise<Heartbeat["capacity"]>): HeartbeatCollectors {
   return {
     cpu: async () => ({ load1: loadavg()[0]!, cores: cpus().length }),
-    memory: async () => parseVmStat(await text("vm_stat", []), totalmem()),
-    disk: async () => parseDf(await text("df", ["-k", "/System/Volumes/Data"])),
+    memory: async () => (linux ? parseMeminfo(await readFile("/proc/meminfo", "utf8")) : parseVmStat(await text("vm_stat", []), totalmem())),
+    disk: async () => parseDf(await (linux ? text("df", ["-kP", "/"]) : text("df", ["-k", "/System/Volumes/Data"]))),
     capacity,
   };
 }

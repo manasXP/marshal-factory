@@ -9,7 +9,7 @@ const { db } = await import("../db/client");
 const { jobs, machines } = await import("../db/schema");
 const { isOnline, heartbeatSchema, inventorySchema, parseHeartbeat } = await import("../lib/machine");
 const { parseConnectStatus, readProjects } = await import("../lib/t3-state");
-const { collectHeartbeat, createBeat, identify, inventoryReporter, parseDf, parseOrigin, parseVmStat, writeHeartbeat, writeInventory } = await import("../runner/heartbeat");
+const { collectHeartbeat, createBeat, identify, inventoryReporter, parseDf, parseMeminfo, parseOrigin, parseVmStat, writeHeartbeat, writeInventory } = await import("../runner/heartbeat");
 const { claimLaunch, releaseLaunch } = await import("../runner/ops");
 const { linearJob } = await import("./fixtures");
 
@@ -34,6 +34,18 @@ assert.deepEqual(
   "df reports available and total from the 1024-blocks table",
 );
 assert.throws(() => parseDf("Filesystem   1024-blocks"), "garbled df throws");
+assert.deepEqual(
+  parseDf(fixture("df-linux.txt")),
+  { freeBytes: 21_651_368 * 1024, totalBytes: 47_579_136 * 1024 },
+  "Linux df -kP has the same 1024-blocks table",
+);
+assert.deepEqual(
+  parseMeminfo(fixture("meminfo.txt")),
+  { usedBytes: (12_304_172 - 9_342_112) * 1024, totalBytes: 12_304_172 * 1024 },
+  "Linux memory in use is MemTotal less MemAvailable",
+);
+assert.throws(() => parseMeminfo(fixture("meminfo.txt").replace(/MemAvailable.*\n/, "")), "meminfo without MemAvailable throws");
+assert.throws(() => parseMeminfo("MemTotal:       12304172 kB\nMemAvailable:   99999999 kB\n"), "more available than total throws");
 
 assert.equal(parseOrigin("git@github.com:ski043/marshal-factory.git\n"), "ski043/marshal-factory", "an ssh remote");
 assert.equal(parseOrigin("https://github.com/ski043/factory-demo"), "ski043/factory-demo", "an https remote");
