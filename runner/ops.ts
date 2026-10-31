@@ -611,17 +611,21 @@ export async function claim({
   const read: JobSource[] = [];
   const failed: string[] = [];
   // One source down must not hold back the others; its error is thrown once they are claimed.
-  for (const source of sources) {
-    try {
-      for (const draft of await source.ready()) {
-        if (isJobKey(draft.key)) ready.push({ source, draft });
-        else failed.push(`${source.source} offered ${draft.key}, which is not a job key (see lib/factory.ts)`);
-      }
-      read.push(source.source);
-    } catch (error) {
+  // The sources are read at once, then taken in their own order, so the result is as if read in turn.
+  const reads = await Promise.allSettled(sources.map((source) => source.ready()));
+  sources.forEach((source, i) => {
+    const result = reads[i]!;
+    if (result.status === "rejected") {
+      const error = result.reason;
       failed.push(`${source.source}: ${error instanceof Error ? error.message : String(error)}`);
+      return;
     }
-  }
+    for (const draft of result.value) {
+      if (isJobKey(draft.key)) ready.push({ source, draft });
+      else failed.push(`${source.source} offered ${draft.key}, which is not a job key (see lib/factory.ts)`);
+    }
+    read.push(source.source);
+  });
   const [paused, controls] = await Promise.all([readPause(db), readQueueControls(db)]);
   const held = heldIds(controls);
   const idOf = ({ source, draft }: (typeof ready)[number]) => jobId(source.source, draft.externalId);

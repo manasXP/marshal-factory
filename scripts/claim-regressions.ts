@@ -181,6 +181,28 @@ try {
     "with maxInFlight 2 and one free queued job in its repo, a machine claims one more; another machine's work does not count",
   );
 
+  // The sources are read at once: each sees the other started before it finishes, and one failing is still reported.
+  let started = 0;
+  const seen: number[] = [];
+  const slow = (name: string, fail: boolean) =>
+    ({
+      source: name,
+      ready: async () => {
+        started++;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        seen.push(started);
+        if (fail) throw new Error(`${name} is down`);
+        return [];
+      },
+      overrides: () => NO_OVERRIDES,
+    }) as unknown as Adapter;
+  await assert.rejects(
+    claim({ sources: [slow("linear", false), slow("github", true)], repos: async () => [REPO], registry: async () => [] }),
+    /could not read ready work from github: github is down/,
+    "a failing source is still reported",
+  );
+  assert.deepEqual(seen, [2, 2], "both sources were being read at the same time");
+
   const lease = `${prefix}-lease`;
   await db.insert(intents).values({ id: lease, kind: "stop", created_at: new Date() });
   const leases = await Promise.all([leaseIntent(lease, `${prefix}-a`), leaseIntent(lease, `${prefix}-b`)]);
