@@ -1,4 +1,5 @@
-import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { z } from "zod";
 import { CONFIG_PATH, loadConfig } from "../lib/config";
 
@@ -48,9 +49,10 @@ async function linearWebhook() {
 }
 
 const ids = { linear: await linearWebhook() };
-const raw = JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as Record<string, Record<string, unknown>>;
+const raw = (existsSync(CONFIG_PATH) ? JSON.parse(readFileSync(CONFIG_PATH, "utf8")) : {}) as Record<string, Record<string, unknown>>;
 raw.factory = { ...raw.factory, webhooks: { ...(raw.factory?.webhooks as object), linear: ids.linear } };
+mkdirSync(dirname(CONFIG_PATH), { recursive: true });
 writeFileSync(CONFIG_PATH, `${JSON.stringify(raw, null, 2)}\n`);
-// The mode option only applies when the file is created; the config holds secrets either way.
+// The mode option only applies when the file is created; an older config holds secrets.
 chmodSync(CONFIG_PATH, 0o600);
 console.log(JSON.stringify(ids));
