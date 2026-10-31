@@ -90,7 +90,8 @@ export function parseOrigin(url: string) {
 export function inventoryCollectors(): InventoryCollectors {
   const { factory } = loadConfig();
   return {
-    runnerSha: async () => (await text("git", ["rev-parse", "HEAD"], RUNNER_DIR)).trim(),
+    // A container image has no .git; its build passes the commit in FACTORY_COMMIT.
+    runnerSha: async () => process.env.FACTORY_COMMIT || (await text("git", ["rev-parse", "HEAD"], RUNNER_DIR)).trim(),
     t3: async () => readT3Runtime(),
     connect: connectStatus,
     projects: () => readProjects({ statePath: factory.t3StatePath, repos: factory.repos }),

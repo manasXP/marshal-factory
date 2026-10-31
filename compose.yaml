@@ -1,0 +1,20 @@
+# The runner container; see docs/runner-container.md.
+services:
+  runner:
+    build:
+      context: .
+      args:
+        FACTORY_COMMIT: ${FACTORY_COMMIT:-}
+    image: marshal-factory-runner
+    # The machine's name in the panel; its id is factory.machineId in config.json.
+    hostname: factory-runner
+    restart: unless-stopped
+    # Reaps the git processes the runner spawns and passes SIGTERM on, so the queue drains on stop.
+    init: true
+    stop_grace_period: 2m
+    volumes:
+      - ./.env.local:/app/.env.local:ro
+      - ${FACTORY_RUNNER_HOME:-./.runner-home}:/home/bun
+    logging:
+      driver: json-file
+      options: { max-size: 10m, max-file: "5" }
