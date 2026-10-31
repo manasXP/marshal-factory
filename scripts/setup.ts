@@ -287,8 +287,11 @@ if (process.platform !== "darwin") {
 } else {
   const plist = join(homedir(), "Library/LaunchAgents/com.marshal-factory.runner.plist");
   const current = existsSync(plist) ? /<key>WorkingDirectory<\/key><string>([^<]*)<\/string>/.exec(readFileSync(plist, "utf8"))?.[1] : undefined;
+  // A disabled LaunchAgent means the runner was moved, such as into the container; a second one would share its machine id.
+  const disabled = read("launchctl", ["print-disabled", `gui/${process.getuid!()}`]).includes(`"com.marshal-factory.runner" => disabled`);
+  if (disabled) console.log("left the runner alone: its LaunchAgent is disabled, so it runs elsewhere, such as in the runner container");
   // The runner runs from the live checkout; a setup run from another clone mustn't move it there unasked.
-  if (current && current !== root && !(await yes(`The runner runs from ${current}. Run it from ${root} instead?`, false))) console.log(`left the runner on ${current}`);
+  else if (current && current !== root && !(await yes(`The runner runs from ${current}. Run it from ${root} instead?`, false))) console.log(`left the runner on ${current}`);
   else run("bun", ["scripts/install-runner.ts"]);
 }
 

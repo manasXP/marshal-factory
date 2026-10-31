@@ -244,7 +244,12 @@ section("Runner");
 const LABEL = "com.marshal-factory.runner";
 await check("LaunchAgent", async () => {
   if (process.platform !== "darwin") return skip("the runner installs only on macOS");
-  return (await runs("launchctl", ["print", `gui/${userInfo().uid}/${LABEL}`])) ? ok(`${LABEL} is loaded`) : fail("not loaded: run bun scripts/install-runner.ts");
+  if (await runs("launchctl", ["print", `gui/${userInfo().uid}/${LABEL}`])) return ok(`${LABEL} is loaded`);
+  // A runner moved into the container leaves its LaunchAgent disabled; installing it would start a second runner with the same id.
+  if ((await run("launchctl", ["print-disabled", `gui/${userInfo().uid}`])).includes(`"${LABEL}" => disabled`)) {
+    return skip("disabled, so the runner runs elsewhere, such as in the runner container; the heartbeat below checks it");
+  }
+  return fail("not loaded: run bun scripts/install-runner.ts");
 });
 await check("heartbeat", async () => {
   if (!config || !db) return skip("no config or database");
