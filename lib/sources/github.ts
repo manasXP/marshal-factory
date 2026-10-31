@@ -318,8 +318,11 @@ export function createGithubAdapter(load: () => GithubDeps | Promise<GithubDeps>
     async ready() {
       const { client, label, repos, appLogin } = await deps();
       const drafts = [];
-      for (const repo of await repos()) {
-        for (const issue of await client.readyIssues(repo, label)) {
+      // Every repo is asked at once; the drafts keep the repos' order.
+      const list = await repos();
+      const issuesByRepo = await Promise.all(list.map((repo) => client.readyIssues(repo, label)));
+      for (const [i, repo] of list.entries()) {
+        for (const issue of issuesByRepo[i]!) {
           drafts.push({
             externalId: issueExternalId(repo, issue.number),
             key: issueKey(repo, issue.number),
