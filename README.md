@@ -190,6 +190,8 @@ tail -f ~/Library/Logs/marshal-factory/runner.log
 
 This installs the LaunchAgent `com.marshal-factory.runner`. It starts at login and restarts if it exits. Within a minute the log shows `realtime` `live` and a `heartbeat`, and your Mac appears under **Machines** in the panel. The runner still needs a repo to work in, which the next section adds.
 
+On a Mac without a local T3 install, such as a runner that runs every job in Modal or Upstash Box, run it as `T3CODE_CLI_PATH=$HOME/.t3/bin/t3 bun scripts/install-runner.ts`.
+
 Then check the whole setup:
 
 ```sh
@@ -325,6 +327,8 @@ bun scripts/rollout.ts
 
 It waits for Vercel's production deploy (which runs the migrations), stops the runner, pulls, migrates, redeploys the ingest Function and rebuilds the sandbox image when they changed, and starts the runner again. [docs/operations.md](docs/operations.md#rolling-out-a-merge) has the steps and the opt-in canary.
 
+On a Mac without a local T3 install, run it as `T3CODE_CLI_PATH=$HOME/.t3/bin/t3 bun scripts/rollout.ts`, because it restarts the runner with `install-runner`. A rollout that fails at that step leaves the runner stopped until you run it again.
+
 ## Troubleshooting
 
 - **Start with the doctor**: `bun scripts/doctor.ts` in the live checkout checks every part of the setup and names the fix for what's wrong.
@@ -335,6 +339,7 @@ It waits for Vercel's production deploy (which runs the migrations), stops the r
 - **The board has no live updates.** Check the three Realtime variables in Vercel. Previews never subscribe to live updates; only production does.
 - **A run has no stages or costs.** The target repo's hooks aren't reaching ingest. Check that the files from `install-target` are on the repo's `main`, and that `FACTORY_INGEST_SECRET` in `.env.local` (or `secret` in your config, if it still has one) equals the Function's.
 - **You moved the live checkout.** The hooks and the LaunchAgent hold its old path. Run `install-target` for each repo and `install-runner` again.
+- **`install-runner` or `rollout` fails with "Command failed: /usr/bin/which t3."** The Mac has no local T3 install, so the script can't find the T3 CLI. Set `T3CODE_CLI_PATH`, as in `T3CODE_CLI_PATH=$HOME/.t3/bin/t3 bun scripts/install-runner.ts`, and run it again. After a failed rollout the runner stays stopped until you do.
 
 ## Developing
 
