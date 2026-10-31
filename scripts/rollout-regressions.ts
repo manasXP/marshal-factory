@@ -9,6 +9,8 @@ assert.deepEqual(startupVerdict([]), { state: "waiting" }, "nothing logged yet")
 assert.deepEqual(startupVerdict([okTick]), { state: "waiting" }, "a tick of the old process before the restart does not count");
 assert.deepEqual(startupVerdict([line("start"), line("reconcile", { result: {} })]), { state: "waiting" }, "the startup reconcile alone is not a tick");
 assert.equal(startupVerdict([line("stop"), line("start"), "not json", line("reconcile", { result: {} }), okTick]).state, "clean", "the first tick after start, with errors arrays inside steps, is clean");
+const timedTick = line("tick", { result: { outbox: { delivered: 0 }, ms: { outbox: 12, claimed: 3400 } } });
+assert.equal(startupVerdict([line("start"), timedTick]).state, "clean", "the per-step ms map is not a failed step");
 
 const failedStep = startupVerdict([line("start"), line("tick", { result: { claimed: { error: "Linear is down" }, outbox: {} } })]);
 assert.equal(failedStep.state, "failed", "a tick whose step returned an error is not clean");
