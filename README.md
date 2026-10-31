@@ -179,7 +179,13 @@ neon neon-auth domain add "$(grep '^FACTORY_PANEL_URL=' .env.local | cut -d= -f2
 
 If the URL Vercel gave the panel differs from `FACTORY_PANEL_URL`, fix it in `.env.local` and run the `neon deploy` command from step 4 again, with the real webhook secret from step 6 in place of `pending`, so Realtime trusts the right origin.
 
-Then create your owner account. Sign-up is off by default. The [owner account steps](docs/operations.md#panel-access-and-deploys) turn it on briefly, so you can register with an address from `FACTORY_OWNER_EMAILS` and confirm it with the emailed code.
+Then create your owner account:
+
+```sh
+bun scripts/create-owner.ts
+```
+
+It creates the first address in `FACTORY_OWNER_EMAILS` in Neon Auth (`--email` picks another from the list), and Neon Auth emails it a code. Enter the code and choose the panel password in the terminal. Sign-up stays off throughout. Then sign in at `/auth/sign-in` on the panel. The [owner account steps](docs/operations.md#panel-access-and-deploys) have the details.
 
 ### 9. Start the runner
 
