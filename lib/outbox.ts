@@ -2,7 +2,8 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renam
 import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { CONFIG_PATH } from "./config";
+import { parseEnv } from "node:util";
+import { CONFIG_PATH, DEFAULT_CONFIG_PATH, secretsFromEnv } from "./config";
 import { MAX_BATCH, type FactoryEvent } from "./events";
 import { inTestMode } from "./test-mode";
 
@@ -208,11 +209,21 @@ export async function flushOutbox(fs: OutboxFs, state: string, send: Send, { bud
   return result;
 }
 
-/** Where the hooks and the MCP server report, from the factory config; undefined when it names nowhere. */
-export function readIngestTarget(path = CONFIG_PATH) {
-  if (!existsSync(path)) return undefined;
-  const config = JSON.parse(readFileSync(path, "utf8")) as { ingestUrl?: string; secret?: string };
-  return config.ingestUrl && config.secret ? { ingestUrl: config.ingestUrl, secret: config.secret } : undefined;
+/** The live checkout's .env.local, which the hooks run from on the runner's Mac; a sandbox's bundles have none beside them. */
+const CHECKOUT_ENV_PATH = join(import.meta.dirname, "../.env.local");
+
+/**
+ * Where the hooks and the MCP server report: the factory config, as a sandbox's runner-written one says,
+ * else the live checkout's .env.local, parsed and never loaded, so a check command can't inherit its
+ * secrets. Only the default config falls back, so a test's own config never reports to production.
+ * Undefined when neither names somewhere.
+ */
+export function readIngestTarget(path = CONFIG_PATH, envPath = path === DEFAULT_CONFIG_PATH && !inTestMode() ? CHECKOUT_ENV_PATH : undefined) {
+  const config = (existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {}) as { ingestUrl?: string; secret?: string };
+  const fromEnv: { ingestUrl?: string; secret?: string } = envPath && existsSync(envPath) ? secretsFromEnv(parseEnv(readFileSync(envPath, "utf8"))) : {};
+  const ingestUrl = config.ingestUrl ?? fromEnv.ingestUrl;
+  const secret = config.secret ?? fromEnv.secret;
+  return ingestUrl && secret ? { ingestUrl, secret } : undefined;
 }
 
 /**

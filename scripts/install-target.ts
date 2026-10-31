@@ -28,15 +28,14 @@ if (!target || !existsSync(join(target, ".git"))) {
   process.exit(1);
 }
 
-// Cleanup walks the repos listed in the config; the file holds secrets, so it stays owner-only.
+// Cleanup walks the repos listed in the config; the file may hold secrets, so it stays owner-only.
 const configPath = CONFIG_PATH;
 const config = readJson(configPath);
 const factory = (config.factory as Json | undefined) ?? {};
 const repo = resolve(target);
-if (!existsSync(configPath)) {
-  console.log(`skipped   factory.repos: ${configPath} does not exist yet; add ${repo} there by hand`);
-} else if (!((factory.repos as string[] | undefined) ?? []).includes(repo)) {
+if (!((factory.repos as string[] | undefined) ?? []).includes(repo)) {
   factory.repos = [...((factory.repos as string[] | undefined) ?? []), repo];
+  mkdirSync(dirname(configPath), { recursive: true });
   writeFileSync(configPath, json({ ...config, factory }));
   chmodSync(configPath, 0o600);
   console.log(`added     ${repo} to factory.repos in ${configPath}`);

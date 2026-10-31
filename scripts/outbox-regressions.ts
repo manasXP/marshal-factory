@@ -19,7 +19,7 @@ const { TEST_MACHINE_ID } = await import("../lib/config");
 const { ingestBodySchema } = await import("../lib/events");
 const { ingest } = await import("../lib/ingest");
 const { REPORT_STAGE_TOOL } = await import("../lib/factory");
-const { appendEvent, flushOutbox, localFs, outboxDir, rejectedDir } = await import("../lib/outbox");
+const { appendEvent, flushOutbox, localFs, outboxDir, readIngestTarget, rejectedDir } = await import("../lib/outbox");
 const { mcpIdentity, mcpPosts } = await import("../lib/report-identity");
 const { modal, modalHost } = await import("../lib/modal-host");
 const { boardCards, harnessLine } = await import("../components/panel/cards");
@@ -107,6 +107,23 @@ const assessment = {
 };
 
 try {
+  // Where the reporter reports: the config file, else the live checkout's .env.local, else nowhere.
+  {
+    const target = join(dir, "target");
+    execFileSync("mkdir", ["-p", target]);
+    const file = join(target, "config.json");
+    const envFile = join(target, ".env.local");
+    writeFileSync(envFile, "NEON_FUNCTION_INGEST_BASE_URL=https://env.test/\nFACTORY_INGEST_SECRET=from-env\nDATABASE_URL=postgres://never\n");
+    assert.equal(readIngestTarget(file, undefined), undefined, "no config and no .env.local name nowhere");
+    assert.deepEqual(readIngestTarget(file, envFile), { ingestUrl: "https://env.test/ingest", secret: "from-env" }, "no config falls back to .env.local");
+    writeFileSync(file, JSON.stringify({ factory: { repos: [] } }));
+    assert.deepEqual(readIngestTarget(file, envFile), { ingestUrl: "https://env.test/ingest", secret: "from-env" }, "a config with only settings falls back too");
+    writeFileSync(file, JSON.stringify({ ingestUrl: "https://file.test/ingest", secret: "from-file" }));
+    assert.deepEqual(readIngestTarget(file, envFile), { ingestUrl: "https://file.test/ingest", secret: "from-file" }, "the config file wins, as a sandbox's does");
+    assert.equal(process.env.DATABASE_URL === "postgres://never", false, ".env.local is parsed, never loaded");
+    assert.equal(readIngestTarget(join(target, "other.json")), undefined, "a config other than the default never falls back");
+  }
+
   // The outbox on its own: ordering, failure, refusal and the cap.
   {
     const unit = join(dir, "unit");

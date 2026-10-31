@@ -6,7 +6,8 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./harness";
 import { pricingSchema } from "./pricing";
 import { inTestMode } from "./test-mode";
 
-export const CONFIG_PATH = process.env.MARSHAL_FACTORY_CONFIG ?? join(homedir(), ".config/marshal-factory/config.json");
+export const DEFAULT_CONFIG_PATH = join(homedir(), ".config/marshal-factory/config.json");
+export const CONFIG_PATH = process.env.MARSHAL_FACTORY_CONFIG ?? DEFAULT_CONFIG_PATH;
 
 /** The machine a regression run's runner code acts as, so the jobs a script creates can belong to it. */
 export const TEST_MACHINE_ID = "test-machine";
@@ -140,6 +141,20 @@ export function loadLimits(): FactoryLimits {
   return factorySchema.parse(raw ?? {});
 }
 
+/**
+ * The Linear key and where to report, from the live checkout's .env.local: the same values the ingest
+ * Function and the panel get, so the config file need not repeat them.
+ */
+export function secretsFromEnv(env: Readonly<Record<string, string | undefined>>) {
+  const base = env.NEON_FUNCTION_INGEST_BASE_URL?.replace(/\/+$/, "");
+  return {
+    linearApiKey: env.LINEAR_API_KEY || undefined,
+    ingestUrl: base ? `${base}/ingest` : undefined,
+    secret: env.FACTORY_INGEST_SECRET || undefined,
+  };
+}
+
+/** The runner and scripts load .env.local first; a value the config file still holds wins, as it did before. */
 export function loadConfig(): FactoryConfig {
   if (inTestMode()) {
     return configSchema.parse({
@@ -149,5 +164,11 @@ export function loadConfig(): FactoryConfig {
       factory: { machineId: TEST_MACHINE_ID },
     });
   }
-  return configSchema.parse(JSON.parse(readFileSync(/* turbopackIgnore: true */ CONFIG_PATH, "utf8")));
+  const file = existsSync(/* turbopackIgnore: true */ CONFIG_PATH) ? JSON.parse(readFileSync(/* turbopackIgnore: true */ CONFIG_PATH, "utf8")) : {};
+  const parsed = configSchema.safeParse({ ...secretsFromEnv(process.env), ...file });
+  if (!parsed.success) {
+    const missing = parsed.error.issues.map((issue) => issue.path.join(".")).join(", ");
+    throw new Error(`the factory config is missing or invalid at ${missing}: set LINEAR_API_KEY, FACTORY_INGEST_SECRET and NEON_FUNCTION_INGEST_BASE_URL in .env.local, or check ${CONFIG_PATH}`);
+  }
+  return parsed.data;
 }

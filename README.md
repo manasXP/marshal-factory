@@ -115,18 +115,17 @@ grep '^DATABASE_URL=' .env.local | sed -E 's|.*@(ep-[^.]+)\..*|\1|; s|-pooler$||
 
 ### 5. Write the runner's config
 
-The runner and the reporter read `~/.config/marshal-factory/config.json`:
+There are no secrets to copy here. The runner, the scripts and the reporter hooks read the Linear key (`LINEAR_API_KEY`), the ingest secret (`FACTORY_INGEST_SECRET`) and the ingest Function's URL (`NEON_FUNCTION_INGEST_BASE_URL`) from `.env.local` in this checkout.
+
+`~/.config/marshal-factory/config.json` holds only factory settings, and the install scripts create it: step 7 records the webhook id there and [Add your repo](#add-your-repo) adds each repo. If your team key or label isn't `FAC` and `factory`, create it now:
 
 ```sh
 mkdir -p ~/.config/marshal-factory
-set -a; source .env.local; set +a
-jq -n --arg key "$LINEAR_API_KEY" --arg url "$NEON_FUNCTION_INGEST_BASE_URL/ingest" --arg secret "$FACTORY_INGEST_SECRET" \
-  '{linearApiKey: $key, ingestUrl: $url, secret: $secret, factory: {teamKey: "FAC", label: "factory"}}' \
-  > ~/.config/marshal-factory/config.json
+echo '{"factory": {"teamKey": "FAC", "label": "factory"}}' > ~/.config/marshal-factory/config.json
 chmod 600 ~/.config/marshal-factory/config.json
 ```
 
-`secret` must equal `FACTORY_INGEST_SECRET`, or ingest rejects the reporter's events. [Settings](#settings) lists the optional limits you can add under `factory`.
+[Settings](#settings) lists the optional limits you can add under `factory`. A config written by an older README still holds `linearApiKey`, `ingestUrl` and `secret`. It keeps working, and those values win over `.env.local`, so delete them from the file to keep one copy.
 
 ### 6. Create the GitHub App
 
@@ -317,7 +316,7 @@ It waits for Vercel's production deploy (which runs the migrations), stops the r
 - **Machine shows offline.** The runner isn't sending heartbeats. Check `launchctl list | grep marshal-factory`, then the log. Run `bun runner/index.ts --once` in the live checkout to do one pass by hand and see its output.
 - **Sign-up fails with "Invalid origin."** Neon Auth only accepts sign-ups from its trusted domains, and the panel's domain isn't one of them. Run `neon neon-auth domain add https://<your panel domain> --branch main`, then sign up again. See [the owner account steps](docs/operations.md#panel-access-and-deploys).
 - **The board has no live updates.** Check the three Realtime variables in Vercel. Previews never subscribe to live updates; only production does.
-- **A run has no stages or costs.** The target repo's hooks aren't reaching ingest. Check that the files from `install-target` are on the repo's `main`, and that `secret` in your config equals `FACTORY_INGEST_SECRET` in the Function.
+- **A run has no stages or costs.** The target repo's hooks aren't reaching ingest. Check that the files from `install-target` are on the repo's `main`, and that `FACTORY_INGEST_SECRET` in `.env.local` (or `secret` in your config, if it still has one) equals the Function's.
 - **You moved the live checkout.** The hooks and the LaunchAgent hold its old path. Run `install-target` for each repo and `install-runner` again.
 
 ## Developing
