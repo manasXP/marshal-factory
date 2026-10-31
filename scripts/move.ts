@@ -1,5 +1,5 @@
-import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -45,7 +45,15 @@ function run(commandName: string, commandArgs: string[], env?: Record<string, st
   const result = spawnSync(commandName, commandArgs, { cwd: root, env: { ...process.env, ...env }, stdio: ["ignore", "inherit", "inherit"] });
   if (result.status !== 0) throw new MoveError(`${commandName} ${commandArgs[0]} exited ${result.status ?? result.signal}`);
 }
-const files = (dir: string): string[] => readdirSync(dir).flatMap((name) => (statSync(join(dir, name)).isDirectory() ? files(join(dir, name)) : [join(dir, name)]));
+/** The regular files under dir; anything else, such as a symlink a bundle shouldn't hold, stops the unpack. */
+const files = (dir: string): string[] =>
+  readdirSync(dir).flatMap((name) => {
+    const path = join(dir, name);
+    const stat = lstatSync(path);
+    if (stat.isDirectory()) return files(path);
+    if (!stat.isFile()) throw new MoveError(`the bundle holds ${name}, which is not a regular file`);
+    return [path];
+  });
 
 async function passphrase(confirm: boolean) {
   const value = await askHidden("Bundle passphrase (hidden): ");
@@ -164,6 +172,10 @@ const staging = mkdtempSync(join(tmpdir(), "factory-move-"));
 try {
   openssl("-d", bundle, join(staging, "bundle.tgz"), await passphrase(false));
   mkdirSync(join(staging, "files"));
+  // Every entry must sit under home/ or checkout/ before anything is extracted.
+  const entries = execFileSync("tar", ["-tzf", join(staging, "bundle.tgz")], { encoding: "utf8" }).split("\n").map((entry) => entry.replace(/^\.\//, "")).filter((entry) => entry && entry !== ".");
+  const strange = entries.find((entry) => entry.startsWith("/") || entry.split("/").includes("..") || !/^(home|checkout)(\/|$)/.test(entry));
+  if (strange) throw new MoveError(`the bundle holds an unexpected path, ${strange}`);
   run("tar", ["-xzf", join(staging, "bundle.tgz"), "-C", join(staging, "files")]);
   const placed = files(join(staging, "files")).map((path) => {
     const rel = relative(join(staging, "files"), path);
