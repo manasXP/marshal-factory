@@ -22,9 +22,16 @@ export const isJobSource = (name: string): name is JobSource => Object.hasOwn(SO
 /** Every registered source, for the work a runner does across them: claiming, stop checks, label sync. */
 export const allSources = (): SourceAdapter<JobSource>[] => Object.values(SOURCES);
 
-/** Where the panel files new jobs and uploads their images, and whose override labels it adds. */
+/** Where the panel uploads images for new jobs, and whose override label groups it syncs. */
 const PANEL_SOURCE: JobSource = "linear";
 export const panelSource = () => sourceFor(PANEL_SOURCE);
+
+/** A source the panel files new jobs in; throws for one that cannot file. */
+export function filingSource(source: JobSource) {
+  const adapter = sourceFor(source);
+  if (!adapter.file) throw new Error(`the ${source} source cannot file jobs`);
+  return { ...adapter, file: adapter.file };
+}
 
 /**
  * Adds a source beside the shipped ones. Only regressions call it, with a fake source that proves

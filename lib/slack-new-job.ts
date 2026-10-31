@@ -259,6 +259,7 @@ const BLOCK_OF: Record<keyof NewJob, string> = {
   repo: NEW_JOB_BLOCKS.repo,
   provider: NEW_JOB_BLOCKS.harness,
   execution: NEW_JOB_BLOCKS.runsOn,
+  source: NEW_JOB_BLOCKS.title,
 };
 
 /** The New job modal's submission: an invalid form is refused inline, a valid one closes and is filed after the ack. */

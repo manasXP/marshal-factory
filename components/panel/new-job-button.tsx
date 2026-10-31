@@ -3,7 +3,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { ExternalLinkIcon, ImagePlusIcon, PlusIcon, XIcon } from "lucide-react";
 import { useRef, useState, useTransition, type ClipboardEvent, type DragEvent } from "react";
-import { Controller, useForm } from "react-hook-form";
+import { Controller, useForm, useWatch } from "react-hook-form";
 import { createJob } from "@/app/actions/new-job";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,7 +28,17 @@ import type { Harness } from "@/lib/harness";
 import { displayName } from "@/lib/repo-name";
 import { RUNS_ON_LABELS } from "@/lib/ticket-overrides";
 import { cn } from "@/lib/utils";
-import { JOB_IMAGE_TYPES, MAX_JOB_IMAGE_BYTES, newJobSchema, type ImageUploadOutcome, type NewJob, type NewJobOutcome } from "@/lib/new-job-schema";
+import {
+  FILING_SOURCE_LABELS,
+  FILING_SOURCES,
+  filingSourceSchema,
+  JOB_IMAGE_TYPES,
+  MAX_JOB_IMAGE_BYTES,
+  newJobSchema,
+  type ImageUploadOutcome,
+  type NewJob,
+  type NewJobOutcome,
+} from "@/lib/new-job-schema";
 
 const blank = (): NewJob => ({ title: "", description: "", requestId: crypto.randomUUID() });
 
@@ -52,12 +62,14 @@ async function uploadImage(file: File): Promise<ImageUploadOutcome> {
 
 const SETTINGS_DEFAULT = "settings-default";
 
+const sourceItems = FILING_SOURCES.map((s) => ({ value: s, label: FILING_SOURCE_LABELS[s] }));
+
 const runsOnItems = [
   { value: SETTINGS_DEFAULT, label: "Settings default" },
   ...EXECUTIONS.map((e) => ({ value: e, label: RUNS_ON_LABELS[e] })),
 ];
 
-/** Starts a job by filing it in Linear, where the factory picks it up like any labeled issue. */
+/** Starts a job by filing it in Linear or as a GitHub issue, where the factory picks it up like any labeled issue. */
 export function NewJobButton({ harnesses, repos }: { harnesses: readonly Harness[]; repos: readonly Pick<RepoSettingsRow, "repo" | "display_name" | "enabled" | "is_default">[] }) {
   const [open, setOpen] = useState(false);
   const [created, setCreated] = useState<Extract<NewJobOutcome, { ok: true }> | null>(null);
@@ -71,6 +83,9 @@ export function NewJobButton({ harnesses, repos }: { harnesses: readonly Harness
   const harnessItems = [{ value: SETTINGS_DEFAULT, label: "Settings default" }, ...harnesses.map((h) => ({ value: h.id, label: h.name }))];
   const picker = useRef<HTMLInputElement>(null);
   const uploading = images.some((i) => i.status === "uploading");
+  const source = useWatch({ control: form.control, name: "source" }) ?? "linear";
+  // Images are stored in Linear, whose links GitHub readers and the agent on a GitHub job can't open.
+  const takesImages = source === "linear";
 
   const reset = () => {
     form.reset(blank());
@@ -112,6 +127,7 @@ export function NewJobButton({ harnesses, repos }: { harnesses: readonly Harness
     setImages((current) => current.filter((i) => i.id !== image.id));
   };
   const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    if (!takesImages) return;
     const files = imagesIn(event.clipboardData.files);
     if (files.length === 0) return;
     event.preventDefault();
@@ -119,6 +135,7 @@ export function NewJobButton({ harnesses, repos }: { harnesses: readonly Harness
   };
   const onDrop = (event: DragEvent<HTMLElement>) => {
     setDragging(false);
+    if (!takesImages) return;
     const files = imagesIn(event.dataTransfer.files);
     if (files.length === 0) return;
     event.preventDefault();
@@ -157,7 +174,7 @@ export function NewJobButton({ harnesses, repos }: { harnesses: readonly Harness
             </DialogHeader>
             <DialogFooter>
               <Button variant="outline" render={<a href={created.url} target="_blank" rel="noreferrer" />}>
-                Open in Linear
+                {created.source === "github" ? "Open on GitHub" : "Open in Linear"}
                 <ExternalLinkIcon data-icon="inline-end" />
               </Button>
               <Button onClick={reset}>Start another</Button>
@@ -168,8 +185,8 @@ export function NewJobButton({ harnesses, repos }: { harnesses: readonly Harness
             <DialogHeader>
               <DialogTitle>New job</DialogTitle>
               <DialogDescription>
-                Files a Linear issue with the factory label. Questions and answers then happen on that issue. A harness or
-                place other than the Settings default goes on the issue as its Harness or Runs on label.
+                Files {source === "github" ? "a GitHub issue" : "a Linear issue"} with the factory label. Questions and answers then happen on
+                that issue. A harness or place other than the Settings default goes on the issue as its Harness or Runs on label.
               </DialogDescription>
             </DialogHeader>
             <form onSubmit={submit} className="contents">
@@ -200,15 +217,44 @@ export function NewJobButton({ harnesses, repos }: { harnesses: readonly Harness
                         className={cn(dragging && "border-primary ring-1 ring-primary")}
                         onPaste={onPaste}
                         onDragOver={(event) => {
-                          if (!event.dataTransfer.types.includes("Files")) return;
+                          if (!takesImages || !event.dataTransfer.types.includes("Files")) return;
                           event.preventDefault();
                           setDragging(true);
                         }}
                         onDragLeave={() => setDragging(false)}
                         onDrop={onDrop}
                       />
-                      <FieldDescription>The agent reads this as the spec. Markdown works; paste or drop screenshots in.</FieldDescription>
+                      <FieldDescription>
+                        The agent reads this as the spec. Markdown works{takesImages ? "; paste or drop screenshots in." : "."}
+                      </FieldDescription>
                       {fieldState.error && <FieldError match>{fieldState.error.message}</FieldError>}
+                    </Field>
+                  )}
+                />
+                <Controller
+                  name="source"
+                  control={form.control}
+                  render={({ field }) => (
+                    <Field>
+                      <FieldLabel htmlFor="new-job-source">File in</FieldLabel>
+                      <Select
+                        items={sourceItems}
+                        value={field.value ?? "linear"}
+                        onValueChange={(v) => field.onChange(v === null ? undefined : filingSourceSchema.parse(v))}
+                        disabled={images.length > 0}
+                      >
+                        <SelectTrigger id="new-job-source" className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectPopup>
+                          {sourceItems.map((item) => (
+                            <SelectItem key={item.value} value={item.value}>
+                              {item.label}
+                            </SelectItem>
+                          ))}
+                        </SelectPopup>
+                      </Select>
+                      {images.length > 0 && <FieldDescription>Images go to Linear; remove them to file on GitHub.</FieldDescription>}
                     </Field>
                   )}
                 />
@@ -232,7 +278,9 @@ export function NewJobButton({ harnesses, repos }: { harnesses: readonly Harness
                             ))}
                           </SelectPopup>
                         </Select>
-                        <FieldDescription>Goes on the issue as its Repository label, the default one included.</FieldDescription>
+                        <FieldDescription>
+                          {source === "github" ? "The issue is filed in this repository." : "Goes on the issue as its Repository label, the default one included."}
+                        </FieldDescription>
                       </Field>
                     )}
                   />
@@ -289,46 +337,48 @@ export function NewJobButton({ harnesses, repos }: { harnesses: readonly Harness
                     )}
                   />
                 </div>
-                <div className="flex flex-wrap items-start gap-2">
-                  {images.map((image) => (
-                    <div key={image.id} className="flex flex-col gap-1">
-                      <div className={cn("relative size-16 overflow-hidden rounded-md border", image.status === "failed" && "border-destructive")}>
-                        {/* A local preview of a file the owner just picked; next/image has nothing to optimize here. */}
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={image.preview} alt={image.name} className={cn("size-full object-cover", image.status === "uploading" && "opacity-50")} />
-                        {image.status === "uploading" && <Spinner className="absolute inset-0 m-auto" />}
-                        {image.status !== "uploading" && (
-                          <Button
-                            type="button"
-                            size="icon-xs"
-                            variant="secondary"
-                            className="absolute top-0.5 right-0.5"
-                            aria-label={`Remove ${image.name}`}
-                            onClick={() => removeImage(image)}
-                          >
-                            <XIcon />
-                          </Button>
-                        )}
+                {takesImages && (
+                  <div className="flex flex-wrap items-start gap-2">
+                    {images.map((image) => (
+                      <div key={image.id} className="flex flex-col gap-1">
+                        <div className={cn("relative size-16 overflow-hidden rounded-md border", image.status === "failed" && "border-destructive")}>
+                          {/* A local preview of a file the owner just picked; next/image has nothing to optimize here. */}
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={image.preview} alt={image.name} className={cn("size-full object-cover", image.status === "uploading" && "opacity-50")} />
+                          {image.status === "uploading" && <Spinner className="absolute inset-0 m-auto" />}
+                          {image.status !== "uploading" && (
+                            <Button
+                              type="button"
+                              size="icon-xs"
+                              variant="secondary"
+                              className="absolute top-0.5 right-0.5"
+                              aria-label={`Remove ${image.name}`}
+                              onClick={() => removeImage(image)}
+                            >
+                              <XIcon />
+                            </Button>
+                          )}
+                        </div>
+                        {image.status === "failed" && <span className="max-w-16 text-xs text-destructive">{image.message}</span>}
                       </div>
-                      {image.status === "failed" && <span className="max-w-16 text-xs text-destructive">{image.message}</span>}
-                    </div>
-                  ))}
-                  <Button type="button" variant="outline" size="sm" onClick={() => picker.current?.click()}>
-                    <ImagePlusIcon data-icon="inline-start" />
-                    Add image
-                  </Button>
-                  <input
-                    ref={picker}
-                    type="file"
-                    accept={JOB_IMAGE_TYPES.join(",")}
-                    multiple
-                    hidden
-                    onChange={(event) => {
-                      addImages(imagesIn(event.target.files ?? []));
-                      event.target.value = "";
-                    }}
-                  />
-                </div>
+                    ))}
+                    <Button type="button" variant="outline" size="sm" onClick={() => picker.current?.click()}>
+                      <ImagePlusIcon data-icon="inline-start" />
+                      Add image
+                    </Button>
+                    <input
+                      ref={picker}
+                      type="file"
+                      accept={JOB_IMAGE_TYPES.join(",")}
+                      multiple
+                      hidden
+                      onChange={(event) => {
+                        addImages(imagesIn(event.target.files ?? []));
+                        event.target.value = "";
+                      }}
+                    />
+                  </div>
+                )}
                 {failure && (
                   <p role="alert" className="text-sm text-destructive">
                     {failure}

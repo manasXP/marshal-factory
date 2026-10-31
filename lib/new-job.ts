@@ -1,6 +1,6 @@
 import { isOwner, type SessionUser } from "@/lib/auth/owner";
 import type { Harness } from "@/lib/harness";
-import { JOB_IMAGE_TYPES, MAX_JOB_IMAGE_BYTES, newJobSchema, type ImageUploadOutcome, type NewJobOutcome } from "@/lib/new-job-schema";
+import { FILING_SOURCE_LABELS, JOB_IMAGE_TYPES, MAX_JOB_IMAGE_BYTES, newJobSchema, type FilingSource, type ImageUploadOutcome, type NewJobOutcome } from "@/lib/new-job-schema";
 import type { FileDraft, FiledJob, ImageFile } from "@/lib/sources/types";
 import { defaultRepo, repoLabel, REPOSITORY_GROUP, type Registry } from "@/lib/repositories";
 import { HARNESS_GROUP, RUNS_ON_GROUP, RUNS_ON_LABELS } from "@/lib/ticket-overrides";
@@ -8,11 +8,12 @@ import { HARNESS_GROUP, RUNS_ON_GROUP, RUNS_ON_LABELS } from "@/lib/ticket-overr
 // A job started from the panel is filed in its source like any other: for Linear, a Todo issue with
 // the factory label that the webhook brings to the runner. Questions, stops and write-back then
 // work as they do for an issue filed by hand. A harness or execution chosen in the form goes on the
-// issue as the same override label a person would add, and so does the repo, default or not.
+// issue as the same override label a person would add, and so does the repo, default or not. GitHub
+// files the issue in the repo itself instead.
 
 export type NewJobDeps = {
   user: () => Promise<SessionUser | null | undefined>;
-  file: (draft: FileDraft) => Promise<FiledJob>;
+  file: (draft: FileDraft, source: FilingSource) => Promise<FiledJob>;
   /** What the machines report; null when none has reported its harnesses yet. */
   harnesses: () => Promise<Harness[] | null>;
   registry: () => Promise<Registry>;
@@ -22,11 +23,12 @@ export async function createJob(deps: NewJobDeps, input: unknown): Promise<NewJo
   if (!isOwner(await deps.user())) return { ok: false, status: 403, message: "Only the factory owner can start jobs." };
   const parsed = newJobSchema.safeParse(input);
   if (!parsed.success) return { ok: false, status: 400, message: parsed.error.issues[0]?.message ?? "The job is not valid." };
-  const { provider, execution, repo, ...draft } = parsed.data;
+  const { provider, execution, repo, source = "linear", ...draft } = parsed.data;
   const labels: NonNullable<FileDraft["labels"]> = [];
   const registry = await deps.registry();
   const target = repo ? registry.find((r) => r.repo === repo) : defaultRepo(registry);
   if (repo && !target?.enabled) return { ok: false, status: 400, message: `${repo} is not an enabled repository.` };
+  if (source === "github" && !target) return { ok: false, status: 400, message: "Pick the repository to file the GitHub issue in." };
   if (target) labels.push({ group: REPOSITORY_GROUP, name: repoLabel(registry, target) });
   if (provider) {
     const harness = (await deps.harnesses())?.find((h) => h.id === provider && h.enabled);
@@ -35,10 +37,10 @@ export async function createJob(deps: NewJobDeps, input: unknown): Promise<NewJo
   }
   if (execution) labels.push({ group: RUNS_ON_GROUP, name: RUNS_ON_LABELS[execution] });
   try {
-    const filed = await deps.file({ ...draft, ...(labels.length > 0 && { labels }) });
-    return { ok: true, identifier: filed.key, url: filed.url };
+    const filed = await deps.file({ ...draft, ...(target && { repo: target.repo }), ...(labels.length > 0 && { labels }) }, source);
+    return { ok: true, identifier: filed.key, url: filed.url, source };
   } catch (error) {
-    return { ok: false, status: 502, message: `Could not file the job: ${error instanceof Error ? error.message : String(error)}` };
+    return { ok: false, status: 502, message: `Could not file the job in ${FILING_SOURCE_LABELS[source]}: ${error instanceof Error ? error.message : String(error)}` };
   }
 }
 

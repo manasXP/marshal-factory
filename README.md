@@ -163,7 +163,7 @@ Import the repo into Vercel as a Next.js project. `vercel.json` already sets the
   - `NEON_REALTIME_URL`, `NEXT_PUBLIC_NEON_REALTIME_URL`, `NEON_REALTIME_SECRET`
   - `FACTORY_OWNER_EMAILS`
   - `LINEAR_API_KEY`, used by the New job form
-  - `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY`, from `~/.config/marshal-factory/github-app.json`, so **Add repository** can list the repos the App reaches
+  - `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY`, from `~/.config/marshal-factory/github-app.json`, so **Add repository** can list the repos the App reaches and **New job** can file GitHub issues
   - `FACTORY_TEAM_KEY` and `FACTORY_LABEL`, if they differ from `FAC` and `factory`
 - Add `FACTORY_PRODUCTION_ENDPOINTS`, the endpoint id from step 4, for Preview (and Development, if you build there). Separate several endpoints with commas. A non-production build without it refuses to migrate.
   - Optional: `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET`, so you can paste a repo's secrets in the panel instead of running a command on the Mac
@@ -211,7 +211,7 @@ Then restart the runner so it loads the new repo: `bun scripts/install-runner.ts
 
 The factory can work in several repos. **Repositories** in the panel lists each one with its open jobs, its last job, where its jobs can run (Modal, a runner's local checkout, or neither yet) and how far the factory may merge there. Open a repo to change its display name, make it the default, disable it, give it a default harness and place, or set merging and **Require Bugbot review**.
 
-An issue picks its repo with a child of the **Repository** label group in Linear, named by the repo's display name (`factory-demo` for `ski043/factory-demo` unless you rename it). An issue without one goes to the default repo. A label that names an unknown or disabled repo also goes to the default, and the issue gets one comment saying so. **New job** has a Repository select and always files the issue with its Repository label.
+An issue picks its repo with a child of the **Repository** label group in Linear, named by the repo's display name (`factory-demo` for `ski043/factory-demo` unless you rename it). An issue without one goes to the default repo. A label that names an unknown or disabled repo also goes to the default, and the issue gets one comment saying so. **New job** has a Repository select and always files a Linear issue with its Repository label, or a GitHub issue in that repo.
 
 Per repo, a default harness and place apply when the ticket has no Harness or Runs on label: the ticket's label beats the repo default, which beats Settings. A local run needs the runner's checkout of the repo; without one the job runs in a Modal sandbox when Modal is ready, and otherwise stays queued.
 
@@ -231,7 +231,7 @@ The Jobs page and the Inbox have a repository filter in the header. It is kept i
 
 - In Linear, add the `factory` label to an issue in Todo.
 - On GitHub, add the `factory` label to an open issue in a repo that is enabled on **Repositories**. The job runs in that repo, and the factory reports on the issue as it does on Linear ([GitHub Issues](docs/operations.md#github-issues)).
-- In the panel, click **New job**, then write a title, a description, and optionally paste or drop images. The panel files the issue in Linear for you.
+- In the panel, click **New job**, then write a title, a description, and optionally paste or drop images. The panel files the issue in Linear for you, or, with **File in** set to **GitHub Issues**, in the chosen repo on GitHub (images are Linear's only).
 - In Slack, type `/factory <what to build>`, or pick **Send to factory** from a message's ⋯ menu. Both open the same form ([Connecting Slack](#connecting-slack)).
 
 To run one issue on another harness or place than Settings, add a child of the **Harness** or **Runs on** label group, and to send it to another repo than the default, a child of **Repository**; `bun scripts/sync-linear-labels.ts` creates the groups ([Per-ticket overrides](docs/operations.md#per-ticket-overrides), [Repositories](#repositories)).
