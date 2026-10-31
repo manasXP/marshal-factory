@@ -21,7 +21,7 @@ FACTORY_COMMIT=$(git rev-parse HEAD) docker compose up -d --build
 docker compose logs -f runner
 ```
 
-The image has no `.git`, so `FACTORY_COMMIT` gives the runner its commit. The heartbeat reports it, and a rebuilt sandbox image records it. Within a minute the log shows `realtime` `live` and a `heartbeat`, and the machine appears under **Machines** with the compose host name, `factory-runner`. The panel shows its memory and disk as unknown, because those readings come from macOS tools.
+The image has no `.git`, so `FACTORY_COMMIT` gives the runner its commit, and the build stops without it. The heartbeat reports it, and a rebuilt sandbox image records it. Within a minute the log shows `realtime` `live` and a `heartbeat`, and the machine appears under **Machines** with the compose host name, `factory-runner`. The panel shows its memory and disk as unknown, because those readings come from macOS tools.
 
 To check the setup without starting the daemon, run the doctor in the image:
 

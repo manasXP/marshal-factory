@@ -14,6 +14,8 @@ RUN bun install --frozen-lockfile --production
 COPY . .
 
 ARG FACTORY_COMMIT=""
+# Without it a sandbox image rebuild fails after its snapshot, on the git rev-parse it can't run.
+RUN test -n "$FACTORY_COMMIT" || { echo 'FACTORY_COMMIT is required: FACTORY_COMMIT=$(git rev-parse HEAD) docker compose up -d --build' >&2; exit 1; }
 ENV FACTORY_COMMIT=$FACTORY_COMMIT
 
 # HOME (/home/bun) is a volume: the configs, the sandbox image records and the runner's state.
