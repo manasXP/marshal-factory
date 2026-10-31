@@ -7,6 +7,9 @@ FROM oven/bun:1.4.4-slim
 RUN apt-get update \
   && apt-get install -y --no-install-recommends git ca-certificates \
   && rm -rf /var/lib/apt/lists/*
+# Runs whose sandbox has ended name transcripts under /root, the sandbox's home; the runner reads them
+# here and, as on a Mac with no /root, must find nothing instead of being refused.
+RUN chmod 755 /root
 
 WORKDIR /app
 COPY package.json bun.lock ./
