@@ -43,7 +43,9 @@ Jobs, and the post-merge watch, stay with the machine that claimed them. Drain t
 
 ## Updating
 
-`bun scripts/rollout.ts` drives the LaunchAgent, so it doesn't apply to the container. After a merge to `main`, wait for Vercel's production deploy, which runs the migrations. Then, on the host:
+`bun scripts/rollout.ts` drives the container when the checkout's compose project has one ([Rolling out a merge](operations.md#rolling-out-a-merge)): it stops it with `docker compose stop`, pulls, migrates, redeploys ingest and the sandbox image when needed, then rebuilds and starts it and waits for its first clean tick. It never installs the LaunchAgent then. It needs the install's tools on the host (gh, neon, `.neon`) and counts the jobs in flight from `~/.config/marshal-factory/config.json`, so it refuses unless `factory.machineId` there is the container's, as on a Mac whose override mounts that directory into the container. To go back to the LaunchAgent, remove the container with `docker compose down`.
+
+Without those, update by hand. After a merge to `main`, wait for Vercel's production deploy, which runs the migrations. Then, on the host:
 
 ```sh
 git pull

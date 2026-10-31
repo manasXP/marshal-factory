@@ -15,6 +15,8 @@ import { imageProblem, IMAGE_BUNDLES, readSandboxImage } from "../lib/sandbox";
 //   5. redeploy the ingest Function when its bundle's inputs changed since the last rollout
 //   6. rebuild the sandbox image when its pins drifted or its bundles' inputs changed since it was built
 //   7. reinstall the runner and wait for its first clean tick
+// The runner is the LaunchAgent, or the runner container when the checkout's compose project has one
+// (docs/runner-container.md): stopped with docker compose stop, started with docker compose up --build.
 // Then it records the commit in ~/.config/marshal-factory/rollout.json for the next run.
 //   bun scripts/rollout.ts [--wait] [--canary] [--force] [--checkout <path>]
 // --canary runs scripts/canary.ts afterwards. --force rolls out even when the commit was rolled out
@@ -39,13 +41,24 @@ class StepError extends Error {}
 let runnerStopped = flag(ALREADY_STOPPED);
 
 /** Runs a command in the checkout with its output shown, failing the rollout when it fails. */
-function run(command: string, commandArgs: string[]) {
-  log(`$ ${[command, ...commandArgs].join(" ")}`);
-  const result = spawnSync(command, commandArgs, { cwd: checkout, stdio: "inherit" });
+function run(command: string, commandArgs: string[], env: Record<string, string> = {}) {
+  log(`$ ${[...Object.entries(env).map(([k, v]) => `${k}=${v}`), command, ...commandArgs].join(" ")}`);
+  const result = spawnSync(command, commandArgs, { cwd: checkout, stdio: "inherit", env: { ...process.env, ...env } });
   if (result.status !== 0) throw new StepError(`${command} ${commandArgs.join(" ")} exited ${result.status ?? result.signal}`);
 }
 const read = (command: string, commandArgs: string[]) => execFileSync(command, commandArgs, { cwd: checkout, encoding: "utf8" }).trim();
 const git = (...gitArgs: string[]) => read("git", gitArgs);
+
+/** A runner container, running or stopped, in the checkout's compose project; no Docker means none. */
+function hasContainer() {
+  try {
+    return read("docker", ["compose", "ps", "--all", "--quiet", "runner"]) !== "";
+  } catch {
+    return false;
+  }
+}
+const container = hasContainer();
+const stopRunner = () => (container ? run("docker", ["compose", "stop", "runner"]) : run("bun", ["scripts/install-runner.ts", "--uninstall"]));
 
 async function waitFor<T>(what: string, timeoutMs: number, everyMs: number, check: () => Promise<T | undefined> | T | undefined) {
   const deadline = Date.now() + timeoutMs;
@@ -96,18 +109,25 @@ async function beforePull() {
 
   process.chdir(checkout);
   process.loadEnvFile(".env.local");
+  if (container) {
+    log("runner: the runner container");
+    // The jobs in flight are counted for this host's machine id, which is the container's only when pinned.
+    const { thisMachine } = await import(join(checkout, "runner/heartbeat.ts"));
+    if ((await thisMachine()).idFrom !== "config") throw new StepError("the runner container's jobs can't be counted from here: set factory.machineId in ~/.config/marshal-factory/config.json to the container's");
+  }
   let busy = await inFlight();
   if (busy > 0 && !flag("--wait")) throw new StepError(`${busy} job(s) in flight on this machine; rerun with --wait to wait for them`);
   if (busy > 0) {
     log(`${busy} job(s) in flight; waiting until none is`);
     await waitFor("jobs in flight to finish", 6 * 3_600_000, 60_000, async () => ((busy = await inFlight()) === 0 ? true : undefined));
   }
-  run("bun", ["scripts/install-runner.ts", "--uninstall"]);
+  stopRunner();
   runnerStopped = true;
   // The runner may have claimed a job between the count and the stop.
   busy = await inFlight();
   if (busy > 0) {
-    run("bun", ["scripts/install-runner.ts"]);
+    if (container) run("docker", ["compose", "start", "runner"]);
+    else run("bun", ["scripts/install-runner.ts"]);
     runnerStopped = false;
     throw new StepError(`a job was claimed while stopping the runner; it runs again, rerun the rollout${flag("--wait") ? "" : " with --wait"}`);
   }
@@ -166,11 +186,15 @@ async function afterPull() {
   }
 
   const offset = existsSync(LOG_PATH) ? statSync(LOG_PATH).size : 0;
-  run("bun", ["scripts/install-runner.ts"]);
+  const since = new Date().toISOString();
+  // The image has no .git, so the build takes the commit from FACTORY_COMMIT.
+  if (container) run("docker", ["compose", "up", "--detach", "--build", "runner"], { FACTORY_COMMIT: head });
+  else run("bun", ["scripts/install-runner.ts"]);
   runnerStopped = false;
   log("waiting for the runner's first tick");
   const verdict = await waitFor("the runner's first tick", 15 * 60_000, 5_000, () => {
-    const v = startupVerdict(readFrom(LOG_PATH, offset).split("\n"));
+    const lines = container ? read("docker", ["compose", "logs", "--no-log-prefix", "--since", since, "runner"]) : readFrom(LOG_PATH, offset);
+    const v = startupVerdict(lines.split("\n"));
     return v.state === "waiting" ? undefined : v;
   });
   if (verdict.state === "failed") throw new StepError(`the runner came up unhealthy: ${verdict.why}`);
@@ -211,7 +235,7 @@ try {
   process.exit(0);
 } catch (error) {
   console.error(`rollout stopped: ${error instanceof Error ? error.message : String(error)}`);
-  if (runnerStopped) console.error("The runner is stopped. Fix the cause and run the rollout again, or start the runner as it is with bun scripts/install-runner.ts.");
+  if (runnerStopped) console.error(`The runner is stopped. Fix the cause and run the rollout again, or start the runner as it is with ${container ? "docker compose start runner" : "bun scripts/install-runner.ts"}.`);
   if (!(error instanceof StepError) && error instanceof Error) console.error(error.stack);
   process.exit(1);
 }
