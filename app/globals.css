@@ -8,6 +8,13 @@
   --color-warning: var(--warning);
   --color-info: var(--info);
   --color-violet: var(--violet);
+  --color-viz-blue: var(--viz-blue);
+  --color-viz-aqua: var(--viz-aqua);
+  --color-viz-yellow: var(--viz-yellow);
+  --color-viz-magenta: var(--viz-magenta);
+  --color-viz-violet: var(--viz-violet);
+  --color-viz-red: var(--viz-red);
+  --color-viz-gray: var(--viz-gray);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
@@ -141,6 +148,18 @@
   --warning: #d97706;
   --info: #0057ff;
   --violet: #7c3aed;
+  /*
+   * Analytics series colors: one step per hue for each theme, checked as sets against the card
+   * (light #ffffff, dark #1f1f1f) for colorblind and normal-vision separation of neighbours in
+   * the order the charts stack them. Gray is "the rest", never a series of its own.
+   */
+  --viz-blue: #2a78d6;
+  --viz-aqua: #1baf7a;
+  --viz-yellow: #eda100;
+  --viz-magenta: #e87ba4;
+  --viz-violet: #6250d6;
+  --viz-red: #e34948;
+  --viz-gray: #898781;
   --destructive-foreground: var(--color-red-700);
   --info-foreground: var(--color-blue-700);
   --success-foreground: var(--color-emerald-700);
@@ -176,6 +195,13 @@
   --warning: #f0a43a;
   --info: #5c8fff;
   --violet: #a78bfa;
+  --viz-blue: #3987e5;
+  --viz-aqua: #199e70;
+  --viz-yellow: #c98500;
+  --viz-magenta: #d55181;
+  --viz-violet: #9085e9;
+  --viz-red: #e66767;
+  --viz-gray: #898781;
   --destructive-foreground: var(--color-red-400);
   --info-foreground: var(--color-blue-400);
   --success-foreground: var(--color-emerald-400);

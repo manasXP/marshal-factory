@@ -100,6 +100,26 @@ export function FormSkeleton({ sections = 3 }: { sections?: number }) {
   );
 }
 
+/** The analytics page's figures and a chart, while its range loads. */
+export function AnalyticsSkeleton() {
+  return (
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-3 p-4 md:p-6">
+      <Skeleton className="h-4 w-24" />
+      <Skeleton className="h-3 w-80 max-w-full" />
+      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+        {Array.from({ length: 4 }, (_, i) => (
+          <div key={i} className="flex flex-col gap-2 rounded-lg border px-3.5 py-3">
+            <Skeleton className="h-3 w-16" />
+            <Skeleton className="h-6 w-12" />
+            <Skeleton className="h-3 w-28" />
+          </div>
+        ))}
+      </div>
+      <Skeleton className="h-56 w-full rounded-lg" />
+    </div>
+  );
+}
+
 const PANEL_TITLES: Record<PanelView, string> = { inbox: "Inbox", jobs: "Jobs", activity: "Other activity" };
 
 /** The inbox, jobs and other-activity pages while their feeds load. */

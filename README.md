@@ -242,6 +242,8 @@ Within seconds the issue moves to In Progress, a comment says the factory took i
 
 ![The panel's board: runs grouped by stage, each card showing its ticket, model, spend, and machine](docs/images/panel-board.png)
 
+**See how it's going.** **Analytics** sums up the last 7, 30 or 90 days, for every repo or the one the repository filter picks: what the jobs claimed in the range came to (merged by the factory or by you, reverted after a merge, handed over, stopped, failed) and the success rate; spend per day, per repo, per harness and model, per job, and the average cost of a merged job; how long a job takes from claim to PR and from PR to merge, and how long it waits on your answer or your review; and how often the factory's merge decisions said merge or hand over, with the commonest reasons it handed over. Days are your browser's. What each figure counts is in [Analytics](docs/operations.md#analytics).
+
 **What needs you.** The panel's **Inbox** collects everything waiting on you: questions, PRs handed over for review, failures, failed reverts and stops that couldn't be confirmed, each with its actions. With Slack connected, each one also arrives as a message with the same buttons, which is edited once the item is resolved.
 
 **Answer questions.** When the issue is ambiguous or something blocks the run, the card moves to Waiting, and the question is posted as a comment on the Linear issue, usually with options to pick from. Reply on the issue, in the Inbox, or with **Answer** in Slack. The thread continues with your answer.
