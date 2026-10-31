@@ -18,6 +18,8 @@ import type { RepoSettingsRow } from "../db/schema";
 import { routeRepo, withRepoDefaults, type Registry } from "../lib/repositories";
 import type { TicketRecord } from "../lib/ticket-overrides";
 import { sourceFor } from "../lib/sources";
+import { launchable, readPause, readQueueControls } from "../lib/queue";
+import { db } from "../db/client";
 import {
   bindThread,
   claimLaunch,
@@ -223,7 +225,8 @@ export async function launchEntries(entries: readonly LaunchEntry[], deps: Launc
  * Starts a T3 thread for every queued job no machine holds, each where its plan says: on this
  * machine or in a Modal sandbox, with the ticket's overrides over the settings. Each launch is
  * claimed with a pending marker first, so a crash or timeout after T3 created the thread can never
- * start a second one on the same branch, and another machine can never start the same job.
+ * start a second one on the same branch, and another machine can never start the same job. Queued
+ * jobs start in the owner's queue order, and none that is held or any while new work is paused (lib/queue.ts).
  */
 export async function launchQueued(onWorktree: (check: Record<string, unknown>) => void = () => {}) {
   const [checkouts, registry] = await Promise.all([factoryCheckouts(), overrideRuntime.registry()]);
@@ -233,7 +236,8 @@ export async function launchQueued(onWorktree: (check: Record<string, unknown>) 
   const recovered = await recoverPending(checkouts);
   const machine = await thisMachine();
   if ((await machineInFlight(machine.id)) >= config.factory.maxInFlight) return recovered;
-  const queued = (await toLaunch()).filter((entry) => repos.includes(entry.repo));
+  const [paused, controls] = await Promise.all([readPause(db), readQueueControls(db)]);
+  const queued = launchable((await toLaunch()).filter((entry) => repos.includes(entry.repo)), Boolean(paused), controls);
   if (queued.length === 0) return recovered;
   const slot = { id: machine.id, repos, maxInFlight: config.factory.maxInFlight };
   const settings = await launchSettings();

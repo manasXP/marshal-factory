@@ -92,6 +92,11 @@ export interface SourceAdapter<S extends JobSource> {
   panelSyncLabelGroups?(groups: readonly LabelGroupSpec[]): Promise<{ team: string; created: string[]; problems: string[] }>;
   /** What a GitHub App delivery means for this source's jobs; ingest asks every source that has one. */
   appEvent?(event: string, body: unknown, env: Readonly<Record<string, string | undefined>>): IntentDraft | null;
+  /**
+   * Takes the item out of the factory's queue from the panel as a person would, by removing the
+   * factory label; a claimed job then stops through the usual stop path.
+   */
+  dequeue?(externalId: string): Promise<void>;
   /** Stores an image where the source keeps uploads, for a job about to be filed; returns its markdown. */
   uploadImage?(image: ImageFile): Promise<string>;
 }

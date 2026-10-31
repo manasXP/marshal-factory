@@ -288,6 +288,13 @@
       "when": 1793396770930,
       "tag": "0040_settings_spend_limit",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1793406186048,
+      "tag": "0041_queue_control",
+      "breakpoints": true
     }
   ]
 }

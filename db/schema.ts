@@ -356,6 +356,53 @@ export const settings = pgTable("settings", {
   updated_by: text("updated_by").notNull(),
 });
 
+/**
+ * The factory-wide pause; the one row has id "factory". While paused_at is set, runners claim and
+ * launch no new work, and jobs already working carry on. See lib/queue.ts.
+ */
+export const queueState = pgTable("queue_state", {
+  id: text("id").primaryKey(),
+  paused_at: ts("paused_at"),
+  updated_at: ts("updated_at").notNull(),
+  /** The owner's email. */
+  updated_by: text("updated_by").notNull(),
+});
+
+/**
+ * Work a source offers that no runner has claimed: labeled issues beyond what the machines have
+ * room for, or all of them while the factory is paused, as the last claim pass that read the
+ * source saw them. Each pass replaces its sources' rows; the panel's Queue page shows them.
+ */
+export const backlog = pgTable("backlog", {
+  /** The job's id once claimed, `<source>:<external_id>`. */
+  id: text("id").$type<JobId>().primaryKey(),
+  source: text("source").$type<JobSource>().notNull(),
+  external_id: text("external_id").notNull(),
+  key: text("key").notNull(),
+  title: text("title").notNull(),
+  url: text("url").notNull(),
+  /** Where the claim would route it. */
+  repo: text("repo"),
+  /** Its place in the source's own order, in the pass that saw it last. */
+  position: integer("position").notNull(),
+  first_seen_at: ts("first_seen_at").notNull(),
+  seen_at: ts("seen_at").notNull(),
+});
+
+/**
+ * The owner's say over queued work, by job id, for backlog rows and claimed jobs not yet launched:
+ * moved to the front (the latest move first), or held back from claims and launches until released.
+ * A row is dropped once its work has left the queue.
+ */
+export const queueControls = pgTable("queue_controls", {
+  job_id: text("job_id").$type<JobId>().primaryKey(),
+  front_at: ts("front_at"),
+  held_at: ts("held_at"),
+  updated_at: ts("updated_at").notNull(),
+  /** The owner's email. */
+  updated_by: text("updated_by").notNull(),
+});
+
 /** Where Slack notifications go and which events send one; the one row has id "factory". See lib/notifications.ts. */
 export const notificationSettings = pgTable("notification_settings", {
   id: text("id").primaryKey(),
@@ -440,7 +487,7 @@ export const repoSettings = pgTable(
   ],
 );
 
-export const auditAction = pgEnum("audit_action", ["merge_requested", "merge_succeeded", "merge_failed", "sandbox_login_failed", "merge_decided", "override_fallback", "follow_up_filed", "review_dropped", "job_archived", "job_unarchived"]);
+export const auditAction = pgEnum("audit_action", ["merge_requested", "merge_succeeded", "merge_failed", "sandbox_login_failed", "merge_decided", "override_fallback", "follow_up_filed", "review_dropped", "job_archived", "job_unarchived", "queue_changed"]);
 export const auditResult = pgEnum("audit_result", ["ok", "head_moved", "not_mergeable", "refused", "error"]);
 
 /** Who asked the factory to change something outside it, and what happened. */
@@ -468,6 +515,8 @@ export type EventRow = typeof events.$inferSelect;
 export type RunRow = typeof runs.$inferSelect;
 export type AgentRow = typeof agents.$inferSelect;
 export type JobRow = typeof jobs.$inferSelect;
+export type BacklogRow = typeof backlog.$inferSelect;
+export type QueueControlRow = typeof queueControls.$inferSelect;
 export type IntentRow = typeof intents.$inferSelect;
 export type IntentKind = IntentRow["kind"];
 export type MachineRow = typeof machines.$inferSelect;

@@ -514,6 +514,21 @@ export function linearReplier(apiKey: string, options?: LinearOptions) {
   };
 }
 
+/** Removes the factory label from the issue, as unlabeling it in Linear does. */
+export function linearDequeuer(apiKey: string, label: string, options?: LinearOptions) {
+  const client = linearClient(apiKey, options);
+  return async (issueId: string) => {
+    const removed = (await client.labelsOf(issueId)).filter((l) => l.name.toLowerCase() === label.toLowerCase()).map((l) => l.id);
+    if (removed.length > 0) await client.update(issueId, { removedLabelIds: removed });
+  };
+}
+
+const dequeueFromEnv = (issueId: string) => {
+  const key = process.env.LINEAR_API_KEY;
+  if (!key) throw new Error("LINEAR_API_KEY is not set, so the panel cannot change Linear labels");
+  return linearDequeuer(key, process.env.FACTORY_LABEL ?? "factory")(issueId);
+};
+
 const replyFromEnv = (job: Job, requestId: string, body: string) => {
   const key = process.env.LINEAR_API_KEY;
   if (!key) throw new Error("LINEAR_API_KEY is not set, so the panel cannot answer in Linear");
@@ -600,6 +615,7 @@ export const linear: SourceAdapter<"linear"> = {
   file: fileFromEnv,
   uploadImage: uploadFromEnv,
   reply: replyFromEnv,
+  dequeue: dequeueFromEnv,
   panelSyncLabelGroups: syncLabelsFromEnv,
   localizeImages,
 };

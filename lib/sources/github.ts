@@ -439,6 +439,12 @@ export function createGithubAdapter(load: () => GithubDeps | Promise<GithubDeps>
       return { key: issueKey(repo, issue.number), url: issue.html_url };
     },
 
+    async dequeue(externalId) {
+      const { client, label } = await deps();
+      const { repo, number } = parseExternalId(externalId);
+      await client.removeLabel(repo, number, label);
+    },
+
     appEvent: githubIssueIntent,
   };
 }
@@ -458,4 +464,4 @@ const panelDeps = async (): Promise<GithubDeps> => {
 const runner = createGithubAdapter(runtimeDeps);
 const panel = createGithubAdapter(panelDeps);
 
-export const github: SourceAdapter<"github"> = { ...runner, reply: panel.reply, file: panel.file };
+export const github: SourceAdapter<"github"> = { ...runner, reply: panel.reply, file: panel.file, dequeue: panel.dequeue };

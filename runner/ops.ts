@@ -21,6 +21,7 @@ import { readSettings, resolveExecution, resolveHarness, type HarnessChoice } fr
 import type { Execution } from "../lib/execution";
 import type { TicketRecord } from "../lib/ticket-overrides";
 import { readRegistry, registerRepos, routeRepo, type Registry } from "../lib/repositories";
+import { heldIds, heldSql, inQueueOrder, readPause, readQueueControls, recordBacklog } from "../lib/queue";
 import { ensureAwake, HostGoneError, hosts, isHibernated, WakeDeferredError, type JobHost } from "../lib/host";
 import { requestedStop } from "../lib/stop";
 import { bindingOf, canReclaimSql, heldStoppingSql, isStopped, PENDING, stopDeliverableSql, stoppingSql } from "./binding";
@@ -583,7 +584,9 @@ export async function registerCheckouts() {
  * what it could launch and the rest waits for one with room. The row insert is the claim; the
  * advisory lock serializes claimers. Each job goes to the repo its Repository label names, else to
  * the default repo (see lib/repositories.ts); with an empty registry, to this machine's first checkout.
- * A retry routes again from the labels the issue has now.
+ * A retry routes again from the labels the issue has now. Work the owner moved to the front is claimed
+ * first, held work and everything while the factory is paused is not, and what is left unclaimed is
+ * recorded as the backlog the panel's Queue page shows (lib/queue.ts).
  */
 export async function claim({
   sources = allSources(),
@@ -591,6 +594,7 @@ export async function claim({
   registry = () => readRegistry(db),
 }: { sources?: readonly SourceAdapter<JobSource>[]; repos?: () => Promise<string[]>; registry?: () => Promise<Registry> } = {}) {
   const ready: { source: SourceAdapter<JobSource>; draft: JobDraft }[] = [];
+  const read: JobSource[] = [];
   const failed: string[] = [];
   // One source down must not hold back the others; its error is thrown once they are claimed.
   for (const source of sources) {
@@ -599,11 +603,35 @@ export async function claim({
         if (isJobKey(draft.key)) ready.push({ source, draft });
         else failed.push(`${source.source} offered ${draft.key}, which is not a job key (see lib/factory.ts)`);
       }
+      read.push(source.source);
     } catch (error) {
       failed.push(`${source.source}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  const claimed = ready.length === 0 ? { claimed: [], inFlight: 0 } : await claimDrafts(ready, repos, registry);
+  const [paused, controls] = await Promise.all([readPause(db), readQueueControls(db)]);
+  const held = heldIds(controls);
+  const idOf = ({ source, draft }: (typeof ready)[number]) => jobId(source.source, draft.externalId);
+  const claimable = paused ? [] : inQueueOrder(ready, idOf, controls).filter((r) => !held.has(idOf(r)));
+  const claimed = paused
+    ? { claimed: [] as string[], inFlight: 0, paused: true }
+    : claimable.length === 0
+      ? { claimed: [] as string[], inFlight: 0 }
+      : await claimDrafts(claimable, repos, registry);
+  const known = await registry();
+  await recordBacklog(
+    db,
+    read,
+    ready.map(({ source, draft }) => ({
+      id: jobId(source.source, draft.externalId),
+      source: source.source,
+      externalId: draft.externalId,
+      key: draft.key,
+      title: draft.title,
+      url: draft.url,
+      repo: routeRepo(source.overrides(draft.sourceState), known).repo ?? null,
+    })),
+    new Date(),
+  );
   if (failed.length > 0) throw new Error(`could not read ready work from ${failed.join("; ")} (claimed ${claimed.claimed.join(", ") || "nothing"})`);
   return claimed;
 }
@@ -625,7 +653,8 @@ async function claimDrafts(ready: readonly { source: SourceAdapter<JobSource>; d
       .where(
         or(
           and(me, or(inArray(jobs.stage, IN_FLIGHT), stoppingSql)),
-          and(isNull(jobs.machine_id), eq(jobs.stage, "queued"), inArray(jobs.repo, targets)),
+          // A held job will not launch, so it leaves its room to work that will.
+          and(isNull(jobs.machine_id), eq(jobs.stage, "queued"), inArray(jobs.repo, targets), sql`not ${heldSql}`),
         ),
       );
     let inFlight = count;

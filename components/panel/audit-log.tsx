@@ -14,6 +14,7 @@ const ACTION: Record<AuditRow["action"], { label: string; tone: string }> = {
   review_dropped: { label: "Review not forwarded", tone: "text-warning" },
   job_archived: { label: "Archived", tone: "text-foreground" },
   job_unarchived: { label: "Unarchived", tone: "text-foreground" },
+  queue_changed: { label: "Queue changed", tone: "text-foreground" },
 };
 
 const RESULT: Record<NonNullable<AuditRow["result"]>, string> = {
