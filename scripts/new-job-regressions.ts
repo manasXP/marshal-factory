@@ -6,7 +6,9 @@ process.env.FACTORY_OWNER_EMAILS = OWNER;
 
 const { createJob, uploadJobImage } = await import("../lib/new-job");
 const { linearFiler, linearUploader } = await import("../lib/sources/linear");
-type FileDraft = Parameters<typeof createJob>[0]["file"] extends (d: infer D) => unknown ? D : never;
+const { createGithubAdapter } = await import("../lib/sources/github");
+type FileDraft = Parameters<Parameters<typeof createJob>[0]["file"]>[0];
+type Issue = import("../lib/sources/github").Issue;
 
 const owner = { email: OWNER, emailVerified: true };
 const requestId = "6f0c3f8e-1f4b-4a52-9f0e-2d7c5a8b9c10";
@@ -30,12 +32,96 @@ const draft = { title: "Show the item count", description: "On the weight sort b
   assert.equal(filed.length, 0);
 
   const ok = await createJob({ user: async () => owner, file, harnesses, registry }, { ...draft, title: "  Show the item count  " });
-  assert.deepEqual(ok, { ok: true, identifier: "FAC-99", url: "https://linear.app/x/issue/FAC-99" }, "the owner files a job");
+  assert.deepEqual(ok, { ok: true, identifier: "FAC-99", url: "https://linear.app/x/issue/FAC-99", source: "linear" }, "the owner files a job, in Linear by default");
   assert.equal(filed[0]!.title, "Show the item count", "with the title trimmed");
 
   const down = await createJob({ user: async () => owner, file: async () => Promise.reject(new Error("Linear is down")), harnesses, registry }, draft);
   assert.equal(!down.ok && down.status, 502, "a Linear failure is reported");
-  assert.match(!down.ok ? down.message : "", /Linear is down/);
+  assert.match(!down.ok ? down.message : "", /in Linear: Linear is down/);
+}
+
+{
+  const filed: { draft: FileDraft; source: string }[] = [];
+  const file = async (draft: FileDraft, source: string) => (filed.push({ draft, source }), { key: "GH-acme-web-5", url: "https://github.com/acme/web/issues/5" });
+  const repos = async () => [
+    { repo: "acme/web", display_name: null, enabled: true, is_default: true },
+    { repo: "acme/api", display_name: null, enabled: true, is_default: false },
+    { repo: "acme/old", display_name: null, enabled: false, is_default: false },
+  ] as never;
+  const deps = { user: async () => owner, file, harnesses, registry: repos };
+
+  const ok = await createJob(deps, { ...draft, source: "github", repo: "acme/api", execution: "upstash" });
+  assert.deepEqual([ok.ok, ok.ok && ok.source], [true, "github"], "the owner files a job on GitHub");
+  assert.equal(filed[0]!.source, "github", "through the GitHub source");
+  assert.equal(filed[0]!.draft.repo, "acme/api", "in the chosen repo");
+  assert.deepEqual(filed[0]!.draft.labels, [{ group: "Repository", name: "api" }, { group: "Runs on", name: "Upstash" }], "with the same override labels Linear gets");
+  await createJob(deps, { ...draft, source: "github" });
+  assert.equal(filed[1]!.draft.repo, "acme/web", "without a repo, in the default repo");
+  await createJob(deps, draft);
+  assert.deepEqual([filed[2]!.source, filed[2]!.draft.repo], ["linear", "acme/web"], "Linear gets the repo too, and ignores it");
+
+  const disabled = await createJob(deps, { ...draft, source: "github", repo: "acme/old" });
+  assert.equal(!disabled.ok && disabled.status, 400, "a disabled repo is refused");
+  const none = await createJob({ ...deps, registry }, { ...draft, source: "github" });
+  assert.deepEqual([none.ok, !none.ok && none.status], [false, 400], "with no repository registered, a GitHub job has nowhere to go");
+  const bad = await createJob(deps, { ...draft, source: "slack" });
+  assert.equal(!bad.ok && bad.status, 400, "a source the panel cannot file in is refused");
+  assert.equal(filed.length, 3, "and none of those is filed");
+  const down = await createJob({ ...deps, file: async () => Promise.reject(new Error("API rate limit exceeded")) }, { ...draft, source: "github" });
+  assert.match(!down.ok ? down.message : "", /in GitHub Issues: API rate limit exceeded/, "a GitHub failure names GitHub");
+}
+
+{
+  // The GitHub adapter files an issue as the App, findable again by the request's marker.
+  const issues: Issue[] = [];
+  const ensured: string[] = [];
+  let refuse: string | null = null;
+  const client = {
+    recentIssues: async () => [...issues].reverse(),
+    ensureLabel: async (_repo: string, name: string) => {
+      if (name === refuse) throw new Error(`GitHub refused the label "${name}"`);
+      ensured.push(name);
+    },
+    createIssue: async (_repo: string, title: string, body: string, labels: readonly string[]) => {
+      const issue: Issue = { number: issues.length + 1, title, body, html_url: `https://github.com/acme/web/issues/${issues.length + 1}`, state: "open", labels: [...labels] };
+      issues.push(issue);
+      return issue;
+    },
+  };
+  const adapter = createGithubAdapter(() => ({ client: client as never, db: null as never, label: "factory", appLogin: () => "", repos: async () => [] }));
+  const file = adapter.file!;
+  const labels = [{ group: "Repository", name: "web" }, { group: "Harness", name: "Codex" }, { group: "Runs on", name: "Cloud" }];
+
+  await assert.rejects(file({ ...draft }), /needs the repository/, "an issue needs its repo");
+  assert.deepEqual(await file({ ...draft, repo: "acme/web", labels }), { key: "GH-acme-web-1", url: "https://github.com/acme/web/issues/1" }, "the issue is filed");
+  assert.equal(issues[0]!.title, draft.title);
+  assert.match(issues[0]!.body!, new RegExp(`^${draft.description}\\n\\n<!-- marshal-factory:panel-job:${requestId} -->$`), "with the request's marker under the description");
+  assert.deepEqual(issues[0]!.labels, ["factory", "Harness: Codex", "Runs on: Cloud"], "already labeled, with GitHub-style overrides and no Repository label");
+  assert.deepEqual(ensured, issues[0]!.labels, "each label made sure of before the issue exists");
+
+  issues[0]!.labels = ["Harness: Codex", "Runs on: Cloud"];
+  assert.deepEqual(await file({ ...draft, repo: "acme/web", labels }), { key: "GH-acme-web-1", url: "https://github.com/acme/web/issues/1" }, "a second submit finds the first issue");
+  assert.equal(issues.length, 1, "and files nothing new");
+  assert.deepEqual(issues[0]!.labels, ["Harness: Codex", "Runs on: Cloud"], "nor puts back a factory label the owner removed to stop it");
+
+  refuse = "Harness: Codex";
+  await assert.rejects(file({ ...draft, requestId: "0b9d2f71-3c55-4e1a-8f6b-7a2c9e4d1f00", repo: "acme/web", labels }), /refused the label/, "a label GitHub refuses is reported");
+  assert.equal(issues.length, 1, "before any issue is filed");
+}
+
+{
+  const filed: FileDraft[] = [];
+  const deps = {
+    user: async () => owner,
+    file: async (d: FileDraft) => (filed.push(d), { key: "GH-acme-web-1", url: "u" }),
+    harnesses,
+    registry: async () => [{ repo: "acme/web", display_name: null, enabled: true, is_default: true }] as never,
+  };
+  const withImage = { ...draft, description: "See ![screen.png](https://uploads.linear.app/org/abc/screen.png)" };
+  const refused = await createJob(deps, { ...withImage, source: "github" });
+  assert.deepEqual([refused.ok, !refused.ok && refused.status], [false, 400], "a GitHub job refuses images uploaded to Linear");
+  assert.equal((await createJob(deps, withImage)).ok, true, "which a Linear job keeps");
+  assert.equal(filed.length, 1);
 }
 
 {

@@ -102,6 +102,8 @@ export type FileDraft = {
   requestId: string;
   title: string;
   description: string;
+  /** The repository the job is for; a source whose issues live in the repo (GitHub) files it there. */
+  repo?: string;
   /** Override labels the job is filed with, each a child of a source label group. */
   labels?: { group: string; name: string }[];
   /** Plain labels by name, outside any group, such as `review`; created on the team when missing. */

@@ -251,8 +251,8 @@ export function newJobInput(viewId: string, values: z.infer<typeof stateSchema>)
   };
 }
 
-/** Which input a schema issue belongs under. */
-const BLOCK_OF: Record<keyof NewJob, string> = {
+/** Which input a schema issue belongs under; the modal never sends a source, so it has none. */
+const BLOCK_OF: Record<Exclude<keyof NewJob, "source">, string> = {
   title: NEW_JOB_BLOCKS.title,
   description: NEW_JOB_BLOCKS.description,
   requestId: NEW_JOB_BLOCKS.title,
@@ -271,7 +271,7 @@ export function newJobSubmitted(deps: InteractionDeps, payload: unknown, owner: 
   const valid = newJobSchema.safeParse(newJobInput(parsed.data.view.id, parsed.data.view.state.values));
   if (!valid.success) {
     const issue = valid.error.issues[0];
-    return refuse(BLOCK_OF[issue?.path[0] as keyof NewJob] ?? NEW_JOB_BLOCKS.title, issue?.message ?? "The job is not valid.");
+    return refuse(BLOCK_OF[issue?.path[0] as keyof typeof BLOCK_OF] ?? NEW_JOB_BLOCKS.title, issue?.message ?? "The job is not valid.");
   }
   deps.after(() => fileJob(deps, valid.data, meta.data));
   return ack();

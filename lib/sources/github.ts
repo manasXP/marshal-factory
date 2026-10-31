@@ -34,6 +34,7 @@ const MARKERS = /\n*<!-- marshal-factory:[^>]* -->/g;
 const claimMarker = (attempt: number) => (attempt > 1 ? `claim:${attempt}` : "claim");
 const stageMarker = (eventId: string) => `stage:${eventId}`;
 const PANEL_ANSWER = "panel-answer:";
+const panelJobMarker = (requestId: string) => `panel-job:${requestId}`;
 const PANEL_ANSWER_MARKER = "<!-- marshal-factory:panel-answer:";
 
 /** The external id of an issue: `owner/name#number`, so a stop check can reach it from the id alone. */
@@ -123,6 +124,20 @@ export function issuesClient({ api, tokens }: { api: string; tokens: Pick<TokenS
     },
     async removeLabel(repo: RepoName, number: number, label: string) {
       await request(repo, "DELETE", `/repos/${repo}/issues/${number}/labels/${encodeURIComponent(label)}`, { allow: [404] });
+    },
+    /** Creates the label unless the repo has it; an invalid name, such as one over 50 characters, throws. */
+    async ensureLabel(repo: RepoName, name: string) {
+      const { status, json } = await request(repo, "POST", `/repos/${repo}/labels`, { body: { name }, allow: [422] });
+      const exists = z.object({ errors: z.array(z.object({ code: z.string() })) }).safeParse(json).data?.errors.some((e) => e.code === "already_exists");
+      if (status === 422 && !exists) throw new GitHubError(`GitHub refused the label "${name}": ${JSON.stringify(json)}`, 422);
+    },
+    async createIssue(repo: RepoName, title: string, body: string, labels: readonly string[]): Promise<Issue> {
+      return issueSchema.parse((await request(repo, "POST", `/repos/${repo}/issues`, { body: { title, body, labels } })).json);
+    },
+    /** The repo's newest issues, open or closed: where a request that was filed moments ago is. */
+    async recentIssues(repo: RepoName): Promise<Issue[]> {
+      const { json } = await request(repo, "GET", `/repos/${repo}/issues?state=all&sort=created&direction=desc&per_page=100`);
+      return z.array(issueSchema).parse(json).filter((i) => i.pull_request === undefined);
     },
     async close(repo: RepoName, number: number) {
       await request(repo, "PATCH", `/repos/${repo}/issues/${number}`, { body: { state: "closed", state_reason: "completed" } });
@@ -302,7 +317,7 @@ export function createGithubAdapter(load: () => GithubDeps | Promise<GithubDeps>
             key: issueKey(repo, issue.number),
             title: issue.title,
             url: issue.html_url,
-            description: issue.body ?? null,
+            description: issue.body?.replace(MARKERS, "") ?? null,
             writeback: { kind: "github" as const, repo, number: issue.number },
             sourceState: { repo, labels: issue.labels },
           });
@@ -401,6 +416,29 @@ export function createGithubAdapter(load: () => GithubDeps | Promise<GithubDeps>
       await postOnce(await deps(), job, `${PANEL_ANSWER}${requestId}`, body);
     },
 
+    /**
+     * Files the job as an issue in its repo with the factory label, as a person would; the App's
+     * delivery or the next poll claims it. GitHub takes no client-chosen id, so the body carries the
+     * request's marker and a retry finds the issue among the repo's newest and returns it as it is.
+     * The labels are created first and the issue is created with them, so no issue is ever left
+     * without the factory label, and a retry never puts back one the owner removed to stop the job.
+     */
+    async file(draft) {
+      const { client, label } = await deps();
+      if (!draft.repo) throw new Error("a GitHub issue needs the repository to file it in");
+      const repo = draft.repo as RepoName;
+      const id = panelJobMarker(draft.requestId);
+      let issue = (await client.recentIssues(repo)).find((i) => (i.body ?? "").includes(marker(id)));
+      if (!issue) {
+        // The repository is the one the issue lives in, so its label would say nothing.
+        const overrides = (draft.labels ?? []).filter((l) => l.group !== OVERRIDE_GROUPS.repository).map((l) => `${l.group}: ${l.name}`);
+        const labels = [label, ...(draft.tags ?? []), ...overrides];
+        for (const name of labels) await client.ensureLabel(repo, name);
+        issue = await client.createIssue(repo, draft.title, withMarker(id, draft.description), labels);
+      }
+      return { key: issueKey(repo, issue.number), url: issue.html_url };
+    },
+
     appEvent: githubIssueIntent,
   };
 }
@@ -420,4 +458,4 @@ const panelDeps = async (): Promise<GithubDeps> => {
 const runner = createGithubAdapter(runtimeDeps);
 const panel = createGithubAdapter(panelDeps);
 
-export const github: SourceAdapter<"github"> = { ...runner, reply: panel.reply };
+export const github: SourceAdapter<"github"> = { ...runner, reply: panel.reply, file: panel.file };
