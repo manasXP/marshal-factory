@@ -1,0 +1,2 @@
+Filesystem     1024-blocks     Used Available Capacity Mounted on
+overlay           47579136 25927768  21651368      55% /

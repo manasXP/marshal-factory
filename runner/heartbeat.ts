@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpus, hostname, loadavg, totalmem } from "node:os";
+import { cpus, freemem, homedir, hostname, loadavg, totalmem } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { eq } from "drizzle-orm";
@@ -49,6 +49,7 @@ export function parseVmStat(output: string, totalBytes: number) {
   return { usedBytes, totalBytes };
 }
 
+/** Expects the POSIX table (`df -k` on macOS, `df -kP` on Linux), whose header says 1024-blocks. */
 export function parseDf(output: string) {
   const [header, row] = output.trim().split("\n");
   if (!header?.startsWith("Filesystem") || !header.includes("1024-blocks") || !row) throw new Error("df output has no 1024-blocks table");
@@ -64,11 +65,17 @@ export type InventoryCollectors = { [K in keyof Inventory]-?: () => Promise<Inve
 
 const settle = <T>(collect: () => Promise<T>) => collect().catch((): typeof UNKNOWN => UNKNOWN);
 
+/**
+ * macOS under the LaunchAgent, Linux in the runner container (docs/runner-container.md). There Bun's
+ * freemem is MemAvailable, and the disk is the runner's home, which a Mac's Docker bind-mounts from its own disk.
+ */
+const linux = process.platform === "linux";
+
 export function systemCollectors(capacity: () => Promise<Heartbeat["capacity"]>): HeartbeatCollectors {
   return {
     cpu: async () => ({ load1: loadavg()[0]!, cores: cpus().length }),
-    memory: async () => parseVmStat(await text("vm_stat", []), totalmem()),
-    disk: async () => parseDf(await text("df", ["-k", "/System/Volumes/Data"])),
+    memory: async () => (linux ? { usedBytes: totalmem() - freemem(), totalBytes: totalmem() } : parseVmStat(await text("vm_stat", []), totalmem())),
+    disk: async () => parseDf(await text("df", linux ? ["-kP", homedir()] : ["-k", "/System/Volumes/Data"])),
     capacity,
   };
 }

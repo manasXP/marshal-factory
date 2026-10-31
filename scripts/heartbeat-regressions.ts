@@ -34,6 +34,11 @@ assert.deepEqual(
   "df reports available and total from the 1024-blocks table",
 );
 assert.throws(() => parseDf("Filesystem   1024-blocks"), "garbled df throws");
+assert.deepEqual(
+  parseDf(fixture("df-linux.txt")),
+  { freeBytes: 21_651_368 * 1024, totalBytes: 47_579_136 * 1024 },
+  "Linux df -kP has the same 1024-blocks table",
+);
 
 assert.equal(parseOrigin("git@github.com:ski043/marshal-factory.git\n"), "ski043/marshal-factory", "an ssh remote");
 assert.equal(parseOrigin("https://github.com/ski043/factory-demo"), "ski043/factory-demo", "an https remote");
