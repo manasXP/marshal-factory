@@ -18,6 +18,7 @@ const ENV_PATH = join(root, ".env.local");
 if (existsSync(ENV_PATH)) process.loadEnvFile(ENV_PATH);
 
 const { loadConfig } = await import("../lib/config");
+const { PANEL_ENV, SLACK_ENV, wrappedLines } = await import("../lib/env-file");
 const { readIngestTarget } = await import("../lib/outbox");
 const { appJwt, GITHUB_API, githubRequest, readAppFile } = await import("../lib/github/app");
 const { panelUrl, redact, secretValues } = await import("../lib/slack");
@@ -98,8 +99,7 @@ const REQUIRED_ENV = [
 await check(".env.local", () => {
   if (!existsSync(ENV_PATH)) return fail("missing: create it as in README step 4");
   const text = readFileSync(ENV_PATH, "utf8");
-  // A pasted token wrapped onto a second line leaves a line with no NAME=.
-  const broken = text.split("\n").flatMap((line, i) => (line.trim() && !line.trim().startsWith("#") && !/^\s*(export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=/.test(line) ? [i + 1] : []));
+  const broken = wrappedLines(text);
   if (broken.length > 0) return fail(`line ${broken.join(", ")} is not NAME=value; a pasted value may have wrapped onto it`);
   const env = parseEnv(text);
   const missing = REQUIRED_ENV.filter((name) => !env[name]);
@@ -219,12 +219,7 @@ const vercelNames = async (environment: string) =>
 await check("Vercel env", async () => {
   if (!vercelLinked) return skip("this checkout is not linked to a Vercel project: run vercel link");
   if (!(await runs("vercel", ["--version"]))) return skip("no vercel CLI");
-  const needed = [
-    ...REQUIRED_ENV.filter((name) => !["NEON_FUNCTION_INGEST_BASE_URL", "FACTORY_INGEST_SECRET", "LINEAR_WEBHOOK_SECRET"].includes(name)),
-    "GITHUB_APP_ID",
-    "GITHUB_APP_PRIVATE_KEY",
-    ...(process.env.SLACK_BOT_TOKEN ? ["SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET", "SLACK_OWNER_USER_ID"] : []),
-  ];
+  const needed = [...PANEL_ENV, ...(process.env.SLACK_BOT_TOKEN ? SLACK_ENV : [])];
   const production = await vercelNames("production");
   const missing = needed.filter((name) => !production.has(name));
   if (missing.length > 0) return fail(`Production is missing ${missing.join(", ")} (README step 8)`);
@@ -249,7 +244,12 @@ section("Runner");
 const LABEL = "com.marshal-factory.runner";
 await check("LaunchAgent", async () => {
   if (process.platform !== "darwin") return skip("the runner installs only on macOS");
-  return (await runs("launchctl", ["print", `gui/${userInfo().uid}/${LABEL}`])) ? ok(`${LABEL} is loaded`) : fail("not loaded: run bun scripts/install-runner.ts");
+  if (await runs("launchctl", ["print", `gui/${userInfo().uid}/${LABEL}`])) return ok(`${LABEL} is loaded`);
+  // A runner moved into the container leaves its LaunchAgent disabled; installing it would start a second runner with the same id.
+  if ((await run("launchctl", ["print-disabled", `gui/${userInfo().uid}`])).includes(`"${LABEL}" => disabled`)) {
+    return skip("disabled, so the runner runs elsewhere, such as in the runner container; the heartbeat below checks it");
+  }
+  return fail("not loaded: run bun scripts/install-runner.ts");
 });
 await check("heartbeat", async () => {
   if (!config || !db) return skip("no config or database");

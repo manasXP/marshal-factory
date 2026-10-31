@@ -40,6 +40,14 @@ On the Mac that runs the factory:
 
 These steps set up one factory: one Neon project, one panel, and one Mac running the runner. Do them in order. Several steps depend on values an earlier step creates.
 
+After step 1 and the Linear setup in step 3, the setup wizard can do the rest:
+
+```sh
+bun scripts/setup.ts
+```
+
+It asks for your email, the Linear key and team and the panel's URL, and generates the secrets. It then creates and deploys the Neon backend, creates the GitHub App and the Linear webhook, and adds the panel's variables to Vercel from `.env.local`. It also sets the Ignored Build Step, trusts the panel's domain in Neon Auth, creates your owner account and installs the runner. Last, it runs the doctor. Steps that are already done are skipped, so after a failure you fix what it names and run it again. It refuses a `.env.local` with a line that isn't `NAME=value`, which is what a pasted token that wrapped onto a second line leaves, and a pasted key with a line break in it. The steps below are what it does, for doing them by hand or seeing what went wrong.
+
 ### 1. Clone the factory
 
 ```sh

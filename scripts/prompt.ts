@@ -3,6 +3,13 @@ import { createInterface } from "node:readline";
 // Terminal prompts for the setup scripts. From a pipe, each call reads the next line, so a script
 // can also be driven with printf 'a\nb\n' | bun scripts/….
 
+/** A pasted value that went on past a line break: half of a token that wrapped. */
+export class WrappedPaste extends Error {
+  constructor() {
+    super("the pasted value has a line break in it; paste it as one line");
+  }
+}
+
 let lines: AsyncIterator<string> | undefined;
 async function nextLine() {
   lines ??= createInterface({ input: process.stdin })[Symbol.asyncIterator]();
@@ -34,13 +41,15 @@ export async function askHidden(question: string): Promise<string> {
   return new Promise((resolve, reject) => {
     let value = "";
     const onData = (data: Buffer) => {
-      for (const char of data.toString("utf8")) {
+      const chars = [...data.toString("utf8")];
+      for (const [i, char] of chars.entries()) {
         if (char === "\r" || char === "\n" || char === "\u0003") {
           stdin.off("data", onData);
           stdin.setRawMode(false);
           stdin.pause();
           process.stderr.write("\n");
           if (char === "\u0003") reject(new Error("cancelled"));
+          else if (chars.slice(i + 1).join("").trim()) reject(new WrappedPaste());
           else resolve(value);
           return;
         }
