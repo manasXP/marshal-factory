@@ -85,6 +85,7 @@ const deps = {
       },
       harnesses: async () => null,
       registry: async () => [],
+      recordFiling: async () => {},
     },
   },
   panelUrl: "https://panel.test",

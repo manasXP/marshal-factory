@@ -23,6 +23,15 @@ export type JobDraft<S extends JobSource = JobSource> = {
   writeback: WritebackOf<S>;
   /** Merged over the stored state on a reclaim, so state the adapter accumulated survives. */
   sourceState: SourceStateDraftOf<S>;
+  /** Who the source says the item is for; the claim resolves jobs.requested_by from it (lib/requester.ts). */
+  requester?: DraftRequester;
+};
+
+/** An email, or a login where the source has no email; null when the source names nobody. */
+export type DraftRequester = {
+  assignee: string | null;
+  /** Who opened the item; null when the factory's own account did, since job_filings then knows the person. */
+  creator: string | null;
 };
 
 /** The source no longer has the job's item, or this key can't see it; retrying changes nothing. */

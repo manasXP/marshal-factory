@@ -95,6 +95,7 @@ const deps = {
       },
       harnesses: async () => (timeline.push("harnesses"), harnesses),
       registry: async () => (timeline.push("registry"), registry),
+      recordFiling: async () => {},
     },
   },
   panelUrl: "https://panel.test",

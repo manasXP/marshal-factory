@@ -19,10 +19,13 @@ export type NewJobDeps = {
   /** What the machines report; null when none has reported its harnesses yet. */
   harnesses: () => Promise<Harness[] | null>;
   registry: () => Promise<Registry>;
+  /** Records the owner who filed the job, since the source names the factory's own account (lib/requester.ts). */
+  recordFiling: (key: string, email: string) => Promise<void>;
 };
 
 export async function createJob(deps: NewJobDeps, input: unknown): Promise<NewJobOutcome> {
-  if (!isOwner(await deps.user())) return { ok: false, status: 403, message: "Only the factory owner can start jobs." };
+  const user = await deps.user();
+  if (!isOwner(user)) return { ok: false, status: 403, message: "Only the factory owner can start jobs." };
   const parsed = newJobSchema.safeParse(input);
   if (!parsed.success) return { ok: false, status: 400, message: parsed.error.issues[0]?.message ?? "The job is not valid." };
   const { provider, execution, repo, source = "linear", ...draft } = parsed.data;
@@ -42,12 +45,19 @@ export async function createJob(deps: NewJobDeps, input: unknown): Promise<NewJo
     labels.push({ group: HARNESS_GROUP, name: harness.name });
   }
   if (execution) labels.push({ group: RUNS_ON_GROUP, name: RUNS_ON_LABELS[execution] });
+  let filed: FiledJob;
   try {
-    const filed = await deps.file({ ...draft, ...(target && { repo: target.repo }), ...(labels.length > 0 && { labels }) }, source);
-    return { ok: true, identifier: filed.key, url: filed.url, source };
+    filed = await deps.file({ ...draft, ...(target && { repo: target.repo }), ...(labels.length > 0 && { labels }) }, source);
   } catch (error) {
     return { ok: false, status: 502, message: `Could not file the job in ${FILING_SOURCE_LABELS[source]}: ${error instanceof Error ? error.message : String(error)}` };
   }
+  try {
+    await deps.recordFiling(filed.key, user!.email);
+  } catch (error) {
+    // The request id keys the issue, so submitting again finds it and records the filer once more.
+    return { ok: false, status: 502, message: `Filed ${filed.key}, but could not record that you filed it: ${error instanceof Error ? error.message : String(error)}. Submit again to retry.` };
+  }
+  return { ok: true, identifier: filed.key, url: filed.url, source };
 }
 
 export type ImageUploadDeps = {

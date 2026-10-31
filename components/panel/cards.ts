@@ -21,6 +21,8 @@ export type BoardCard = {
   title: string;
   /** The GitHub repo the job runs in; for a run the factory never claimed, whatever the run reported. */
   repo: string | null;
+  /** Who the job is for (lib/requester.ts); null for a run the factory never claimed. */
+  requestedBy: string | null;
   stage: Stage;
   summary: string | null;
   question: string | null;
@@ -148,6 +150,7 @@ export function boardCards(jobs: readonly JobRow[], runs: readonly RunRow[], har
       jobKey: job.key,
       title: job.title,
       repo: job.repo,
+      requestedBy: job.requested_by,
       stage: job.stage,
       summary: job.stage_summary,
       question: job.question,
@@ -184,6 +187,7 @@ export function boardCards(jobs: readonly JobRow[], runs: readonly RunRow[], har
         jobKey: latest.job_key,
         title: latest.title ?? latest.job_key ?? "Factory run",
         repo: latest.repo,
+        requestedBy: null,
         stage: latest.stage,
         summary: latest.stage_summary,
         question: latest.question,

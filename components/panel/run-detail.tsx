@@ -278,6 +278,7 @@ export function RunDetail({
             </span>
           )}
           {run.repo && <span className="min-w-0 truncate">{run.repo}</span>}
+          {job?.requested_by && <span className="min-w-0 truncate">for {job.requested_by}</span>}
           {place && <span>{place}</span>}
           <span className="font-mono">{spend}</span>
         </p>

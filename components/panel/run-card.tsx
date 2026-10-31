@@ -122,6 +122,7 @@ export function StageCard({
   selected,
   machineName,
   repoLabel,
+  requester,
   t3Href,
 }: {
   card: BoardCard;
@@ -130,6 +131,8 @@ export function StageCard({
   machineName: string | null;
   /** Shown only while more than one repo has jobs. */
   repoLabel?: string;
+  /** Who the job is for; shown only while more than one person has jobs. */
+  requester?: string;
   /** The job's thread in its machine's T3, for a stop that couldn't be confirmed. */
   t3Href?: string;
 }) {
@@ -160,6 +163,7 @@ export function StageCard({
         {latest?.status === "active" && <Spinner className="size-2.5 shrink-0" aria-label="Working" />}
         <span className="shrink-0 font-mono">{card.jobKey ?? card.id.slice(0, 8)}</span>
         {repoLabel && <span className="min-w-0 truncate">{repoLabel}</span>}
+        {requester && <span className="min-w-0 truncate" title="Requested by">{requester}</span>}
         <span className="ms-auto flex shrink-0 items-center gap-2">
           {card.attempt > 1 && <span>attempt {card.attempt}</span>}
           {!card.harness || card.harness.tracking === "full" ? (

@@ -13,6 +13,7 @@ import { sandboxState } from "@/lib/execution";
 import { attemptBranch } from "@/lib/factory";
 import { inboxItems } from "@/lib/inbox";
 import { reportedHarnesses } from "@/lib/machine";
+import { isRequestedBy } from "@/lib/requester-filter";
 import { cn } from "@/lib/utils";
 import { groupBy, spendOf } from "./format";
 import { Inbox } from "./inbox";
@@ -26,6 +27,7 @@ import { RunDetailSkeleton } from "./skeletons";
 import { useFeed, type Feed } from "./sealed";
 import { PanelFooter, PanelHeader, type KeyHint } from "./panel-header";
 import { RepoSelect, repoOptions, useRepoFilter, useRepoLabels } from "./repo-filter";
+import { RequesterSelect, useRequesterFilter, useShowsRequester } from "./requester-filter";
 import { StatsStrip } from "./stats-strip";
 import { useAfterHydration } from "./time";
 
@@ -150,6 +152,8 @@ export function LivePanel({
   view,
   jobView: currentJobView,
   repo: currentRepo,
+  mine: currentMine,
+  viewer,
   archived,
   registry,
   jobs,
@@ -164,6 +168,10 @@ export function LivePanel({
   jobView: JobView;
   /** The repo the jobs page and the inbox show, from ?repo or the remembered one; null shows all. */
   repo: string | null;
+  /** The jobs page and the inbox show only the viewer's jobs, from ?by or the remembered choice. */
+  mine: boolean;
+  /** The signed-in owner's email, whose jobs Mine shows. */
+  viewer: string | null;
   /** The jobs page shows the archive, from ?archived=1. */
   archived: boolean;
   registry: readonly PanelRepo[];
@@ -220,9 +228,15 @@ export function LivePanel({
   const repoLabels = useRepoLabels(options);
   const [repoChoice, pickRepo] = useRepoFilter(currentRepo);
   const repo = options.some((o) => o.repo === repoChoice) ? repoChoice : null;
-  const shownJobs = useMemo(() => (repo ? liveJobs.filter((j) => j.repo === repo) : liveJobs), [liveJobs, repo]);
-  const shownCards = useMemo(() => (repo ? cards.filter((c) => c.repo === repo) : cards), [cards, repo]);
-  const shownInbox = useMemo(() => (repo ? inboxItems(shownJobs).length : inboxCount), [repo, shownJobs, inboxCount]);
+  const [mineChoice, pickMine] = useRequesterFilter(currentMine);
+  const mine = mineChoice && viewer !== null;
+  const showRequester = useShowsRequester(showArchive ? archivedJobs : liveJobs);
+  const shownJobs = useMemo(() => liveJobs.filter((j) => (!repo || j.repo === repo) && (!mine || isRequestedBy(j, viewer))), [liveJobs, repo, mine, viewer]);
+  const shownCards = useMemo(
+    () => cards.filter((c) => (!repo || c.repo === repo) && (!mine || isRequestedBy({ requested_by: c.requestedBy }, viewer))),
+    [cards, repo, mine, viewer],
+  );
+  const shownInbox = useMemo(() => (repo || mine ? inboxItems(shownJobs).length : inboxCount), [repo, mine, shownJobs, inboxCount]);
   const inboxOpen = useMemo(
     () => view === "inbox" && inboxKey !== undefined && inboxItems(shownJobs).some((i) => i.job.key === inboxKey),
     [view, inboxKey, shownJobs],
@@ -232,6 +246,10 @@ export function LivePanel({
   const wide = useWide();
   const runCovers = runFull || (selectedRun !== undefined && detail !== undefined && !wide);
   const repoSelect = options.length > 0 && <RepoSelect options={options} value={repo} onChange={pickRepo} />;
+  // Offered once more than one person has jobs, or while Mine is on, so it can be turned off.
+  const requesterSelect = viewer && (showRequester || mine) && (
+    <RequesterSelect jobs={showArchive ? archivedJobs : liveJobs} viewer={viewer} mine={mine} onChange={pickMine} />
+  );
 
   const meta = viewMeta(view);
   const active = runRows.filter((r) => r.status === "active").length;
@@ -241,11 +259,11 @@ export function LivePanel({
         return <Inbox jobs={shownJobs} cards={cards} selected={inboxKey} repoLabels={repoLabels} fullView={fullView} />;
       case "jobs":
         return showArchive ? (
-          <JobList cards={shownCards} agentsBySession={agentsBySession} selected={detail?.sessionId} machines={machineById} repoLabels={repoLabels} archived />
+          <JobList cards={shownCards} agentsBySession={agentsBySession} selected={detail?.sessionId} machines={machineById} repoLabels={repoLabels} showRequester={showRequester} archived />
         ) : jobView === "board" ? (
-          <Board cards={shownCards} agentsBySession={agentsBySession} selected={detail?.sessionId} machines={machineById} repoLabels={repoLabels} />
+          <Board cards={shownCards} agentsBySession={agentsBySession} selected={detail?.sessionId} machines={machineById} repoLabels={repoLabels} showRequester={showRequester} />
         ) : (
-          <JobList cards={shownCards} agentsBySession={agentsBySession} selected={detail?.sessionId} machines={machineById} repoLabels={repoLabels} />
+          <JobList cards={shownCards} agentsBySession={agentsBySession} selected={detail?.sessionId} machines={machineById} repoLabels={repoLabels} showRequester={showRequester} />
         );
       case "activity":
         return <OtherActivity runs={unstaged} agentsBySession={agentsBySession} selected={detail?.sessionId} />;
@@ -264,6 +282,7 @@ export function LivePanel({
         actions={
           meta.job ? (
             <>
+              {requesterSelect}
               {repoSelect}
               {(showArchive || archivedCards.length > 0) && (
                 <Button
@@ -286,7 +305,10 @@ export function LivePanel({
               <NewJobButton harnesses={enabledHarnesses} repos={registry} />
             </>
           ) : view === "inbox" ? (
-            repoSelect
+            <>
+              {requesterSelect}
+              {repoSelect}
+            </>
           ) : undefined
         }
       />

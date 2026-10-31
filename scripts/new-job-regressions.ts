@@ -14,30 +14,38 @@ const owner = { email: OWNER, emailVerified: true };
 const requestId = "6f0c3f8e-1f4b-4a52-9f0e-2d7c5a8b9c10";
 const harnesses = async () => null;
 const registry = async () => [];
+const recordFiling = async () => {};
 const draft = { title: "Show the item count", description: "On the weight sort button.", requestId };
 
 {
   const filed: FileDraft[] = [];
   const file = async (d: FileDraft) => (filed.push(d), { key: "FAC-99", url: "https://linear.app/x/issue/FAC-99" });
   for (const user of [null, { email: "someone@example.com", emailVerified: true }, { email: OWNER, emailVerified: false }]) {
-    const outcome = await createJob({ user: async () => user, file, harnesses, registry }, draft);
+    const outcome = await createJob({ user: async () => user, file, harnesses, registry, recordFiling }, draft);
     assert.deepEqual([outcome.ok, !outcome.ok && outcome.status], [false, 403], `a non-owner (${user?.email ?? "signed out"}) cannot start a job`);
   }
   assert.equal(filed.length, 0, "and nothing is filed");
 
-  const tooShort = await createJob({ user: async () => owner, file, harnesses, registry }, { ...draft, title: " a " });
+  const tooShort = await createJob({ user: async () => owner, file, harnesses, registry, recordFiling }, { ...draft, title: " a " });
   assert.equal(!tooShort.ok && tooShort.status, 400, "a title under 3 characters is refused");
-  const noRequest = await createJob({ user: async () => owner, file, harnesses, registry }, { ...draft, requestId: "not-a-uuid" });
+  const noRequest = await createJob({ user: async () => owner, file, harnesses, registry, recordFiling }, { ...draft, requestId: "not-a-uuid" });
   assert.equal(!noRequest.ok && noRequest.status, 400, "a request without a request id is refused");
   assert.equal(filed.length, 0);
 
-  const ok = await createJob({ user: async () => owner, file, harnesses, registry }, { ...draft, title: "  Show the item count  " });
+  const ok = await createJob({ user: async () => owner, file, harnesses, registry, recordFiling }, { ...draft, title: "  Show the item count  " });
   assert.deepEqual(ok, { ok: true, identifier: "FAC-99", url: "https://linear.app/x/issue/FAC-99", source: "linear" }, "the owner files a job, in Linear by default");
   assert.equal(filed[0]!.title, "Show the item count", "with the title trimmed");
 
-  const down = await createJob({ user: async () => owner, file: async () => Promise.reject(new Error("Linear is down")), harnesses, registry }, draft);
+  const down = await createJob({ user: async () => owner, file: async () => Promise.reject(new Error("Linear is down")), harnesses, registry, recordFiling }, draft);
   assert.equal(!down.ok && down.status, 502, "a Linear failure is reported");
   assert.match(!down.ok ? down.message : "", /in Linear: Linear is down/);
+
+  const filings: [string, string][] = [];
+  await createJob({ user: async () => owner, file, harnesses, registry, recordFiling: async (key, email) => void filings.push([key, email]) }, draft);
+  assert.deepEqual(filings, [["FAC-99", OWNER]], "the owner who filed the job is recorded under the key the source gave it");
+  const unrecorded = await createJob({ user: async () => owner, file, harnesses, registry, recordFiling: async () => Promise.reject(new Error("db down")) }, draft);
+  assert.equal(!unrecorded.ok && unrecorded.status, 502, "a filing that could not be recorded is reported");
+  assert.match(!unrecorded.ok ? unrecorded.message : "", /^Filed FAC-99, but could not record that you filed it: db down\. Submit again/, "naming the issue, so a resubmit finds it");
 }
 
 {
@@ -48,7 +56,7 @@ const draft = { title: "Show the item count", description: "On the weight sort b
     { repo: "acme/api", display_name: null, enabled: true, is_default: false },
     { repo: "acme/old", display_name: null, enabled: false, is_default: false },
   ] as never;
-  const deps = { user: async () => owner, file, harnesses, registry: repos };
+  const deps = { user: async () => owner, file, harnesses, registry: repos, recordFiling };
 
   const ok = await createJob(deps, { ...draft, source: "github", repo: "acme/api", execution: "upstash" });
   assert.deepEqual([ok.ok, ok.ok && ok.source], [true, "github"], "the owner files a job on GitHub");
@@ -116,6 +124,7 @@ const draft = { title: "Show the item count", description: "On the weight sort b
     file: async (d: FileDraft) => (filed.push(d), { key: "GH-acme-web-1", url: "u" }),
     harnesses,
     registry: async () => [{ repo: "acme/web", display_name: null, enabled: true, is_default: true }] as never,
+    recordFiling,
   };
   const withImage = { ...draft, description: "See ![screen.png](https://uploads.linear.app/org/abc/screen.png)" };
   const refused = await createJob(deps, { ...withImage, source: "github" });

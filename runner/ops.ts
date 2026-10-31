@@ -21,6 +21,7 @@ import { readSettings, resolveExecution, resolveHarness, type HarnessChoice } fr
 import type { Execution } from "../lib/execution";
 import type { TicketRecord } from "../lib/ticket-overrides";
 import { readRegistry, registerRepos, routeRepo, type Registry } from "../lib/repositories";
+import { requestedBySql } from "../lib/requester";
 import { heldIds, heldSql, inQueueOrder, pausedSql, readPause, readQueueControls, recordBacklog } from "../lib/queue";
 import { ensureAwake, HostGoneError, hosts, isHibernated, WakeDeferredError, type JobHost } from "../lib/host";
 import { requestedStop } from "../lib/stop";
@@ -683,6 +684,7 @@ async function claimDrafts(ready: readonly { source: SourceAdapter<JobSource>; d
           writeback: draft.writeback,
           source_state: draft.sourceState,
           budget_usd: spendLimit,
+          requested_by: requestedBySql(draft),
           claimed_at: now,
           updated_at: now,
         })
@@ -724,6 +726,7 @@ async function claimDrafts(ready: readonly { source: SourceAdapter<JobSource>; d
             writeback: draft.writeback,
             source_state: sql`${jobs.source_state} || excluded.source_state`,
             budget_usd: spendLimit,
+            requested_by: sql`excluded.requested_by`,
             claimed_at: now,
             updated_at: now,
           },

@@ -2,6 +2,7 @@ import type { AgentRow, MachineRow, RunRow } from "@/db/schema";
 import { cn } from "@/lib/utils";
 import { STAGES } from "@/lib/events";
 import { t3ThreadLink } from "@/lib/machine";
+import { requesterName } from "@/lib/requester-filter";
 import { t3EnvironmentId, type BoardCard } from "./cards";
 import { StageCard } from "./run-card";
 import { STAGE_META } from "./stages";
@@ -18,6 +19,7 @@ export function Board({
   selected,
   machines,
   repoLabels,
+  showRequester = false,
 }: {
   cards: readonly BoardCard[];
   agentsBySession: Map<string, AgentRow[]>;
@@ -25,6 +27,8 @@ export function Board({
   machines: ReadonlyMap<string, MachineRow>;
   /** Each repo's short name, while more than one repo has jobs; undefined shows no repo. */
   repoLabels?: ReadonlyMap<string, string>;
+  /** Name who each job is for; on while more than one person has jobs. */
+  showRequester?: boolean;
 }) {
   const agentsOf = (runs: readonly RunRow[]) =>
     runs.flatMap((r) => agentsBySession.get(r.session_id) ?? []);
@@ -58,6 +62,7 @@ export function Board({
                   agents={agentsOf(card.runs)}
                   selected={card.runs.some((r) => r.session_id === selected)}
                   repoLabel={card.repo ? repoLabels?.get(card.repo) : undefined}
+                  requester={showRequester && card.requestedBy ? requesterName(card.requestedBy) : undefined}
                   t3Href={stopT3Href(card, machines)}
                 />
               ))}

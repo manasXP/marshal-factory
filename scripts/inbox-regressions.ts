@@ -277,6 +277,7 @@ const deps = (user: typeof owner | null = owner) => ({
     harnesses: async () => harnesses,
     registry: async () => [],
     file: async (draft: FileDraft) => (filed.push(draft), { key: `FAC-${filed.length}`, url: `https://linear.app/x/issue/FAC-${filed.length}` }),
+    recordFiling: async () => {},
   },
 });
 const intentRows = (k: string) => db.select().from(intents).where(eq(intents.job_id, jobId("linear", `inbox-regress-${k}`)));

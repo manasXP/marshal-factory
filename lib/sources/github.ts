@@ -10,7 +10,7 @@ import { GITHUB_API, GitHubError, githubRequest, installationTokens, readAppFile
 import { OVERRIDE_GROUPS, type SourceOverrides } from "../ticket-overrides";
 import type { IntentDraft } from "../webhooks";
 import { jobId, type SourceStateDraftOf } from "./shapes";
-import type { Job as AnyJob, Reply, ResumePlan, SourceAdapter } from "./types";
+import type { Job as AnyJob, DraftRequester, Reply, ResumePlan, SourceAdapter } from "./types";
 import { SourceGoneError } from "./types";
 
 type Job = AnyJob<"github">;
@@ -65,6 +65,8 @@ const issueSchema = z.object({
   state: z.enum(["open", "closed"]),
   labels: z.array(z.union([z.string(), z.object({ name: z.string() })])).transform((labels) => labels.map((l) => (typeof l === "string" ? l : l.name))),
   pull_request: z.unknown().optional(),
+  user: userSchema.optional(),
+  assignees: z.array(z.object({ login: z.string() })).nullish(),
 });
 export type Issue = z.infer<typeof issueSchema>;
 
@@ -154,6 +156,12 @@ const isReply = (c: IssueComment, appLogin: string) =>
   c.user?.type === "Bot"
     ? same(c.user.login, appLogin) && (c.body ?? "").includes(PANEL_ANSWER_MARKER)
     : TRUSTED_ASSOCIATIONS.has(c.author_association ?? "");
+
+/** GitHub logins, as GitHub has no email to give; an issue the App filed from the panel has its filer in job_filings instead. */
+export const issueRequester = (issue: Pick<Issue, "user" | "assignees">, appLogin: string): DraftRequester => ({
+  assignee: issue.assignees?.[0]?.login ?? null,
+  creator: issue.user && !(issue.user.type === "Bot" && same(issue.user.login, appLogin)) ? issue.user.login : null,
+});
 
 type WaitingJob = Pick<Job, "stage_event_id" | "question" | "delivered_reply_ids">;
 
@@ -308,7 +316,7 @@ export function createGithubAdapter(load: () => GithubDeps | Promise<GithubDeps>
     source: "github",
 
     async ready() {
-      const { client, label, repos } = await deps();
+      const { client, label, repos, appLogin } = await deps();
       const drafts = [];
       for (const repo of await repos()) {
         for (const issue of await client.readyIssues(repo, label)) {
@@ -320,6 +328,7 @@ export function createGithubAdapter(load: () => GithubDeps | Promise<GithubDeps>
             description: issue.body?.replace(MARKERS, "") ?? null,
             writeback: { kind: "github" as const, repo, number: issue.number },
             sourceState: { repo, labels: issue.labels },
+            requester: issueRequester(issue, appLogin()),
           });
         }
       }
