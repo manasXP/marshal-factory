@@ -220,7 +220,8 @@ async function ingestHasAppSecret() {
   return res.status === 400;
 }
 if (!(await ingestHasAppSecret())) {
-  run("neon", ["functions", "deploy", "ingest", "--branch", "main", "--src", "functions/ingest/index.ts", "--env", `GITHUB_APP_WEBHOOK_SECRET=${app.webhook_secret}`]);
+  // neon.ts reads the secret from github-app.json, so it never shows in a command line or this script's echo.
+  run("neon", ["deploy", "--branch", "main", "--env", ".env.local", "--no-env-pull"]);
   if (!(await ingestHasAppSecret())) throw new SetupError("ingest still rejects the GitHub App's webhook signature after the redeploy");
 }
 ok("ingest checks the App's webhook secret");
