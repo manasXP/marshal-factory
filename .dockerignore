@@ -1,0 +1,9 @@
+.git
+node_modules
+.next
+.vercel
+.neon
+.env*
+.runner-home
+*.tsbuildinfo
+next-env.d.ts

@@ -11,3 +11,6 @@ next-env.d.ts
 /out/
 .neon
 .neon
+
+# The runner container's home (configs, state), see docs/runner-container.md
+/.runner-home/

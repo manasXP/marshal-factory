@@ -315,7 +315,7 @@ export async function buildSandboxImage({
 
     // A stop from here on ends the sandbox under the snapshot, which then fails; one after it records the image, which passed every check.
     const image = await sandbox.snapshotFilesystem({ ttlMs: null, timeoutMs: 300_000 });
-    const factoryCommit = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: ROOT })).stdout.trim();
+    const factoryCommit = process.env.FACTORY_COMMIT || (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: ROOT })).stdout.trim();
     const state: SandboxImage = { imageId: image.imageId, t3Version: limits.t3Version, versions: pinned, factoryCommit, builtAt: new Date().toISOString() };
     writeImage(path, state);
     log(`image ${image.imageId} recorded in ${path}`);

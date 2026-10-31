@@ -348,5 +348,6 @@ Work in a separate clone or worktree, never in the live checkout. Run `bun dev` 
 ## Further reading
 
 - [docs/operations.md](docs/operations.md): how each part behaves, including the runner, write-back, retries, spend, cleanup, the watchdog, sign-in and deploys.
+- [docs/runner-container.md](docs/runner-container.md): running the runner as a Docker container on an always-on host instead of the Mac.
 - [playbooks/factory.md](playbooks/factory.md): what each factory thread is told to do.
 - [docs/research/](docs/research/): background reports from the initial investigation.
