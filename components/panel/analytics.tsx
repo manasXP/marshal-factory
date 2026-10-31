@@ -10,7 +10,7 @@ import {
   OUTCOME_LABELS,
   OUTCOMES,
   RANGES,
-  rangeOf,
+  rangeRepos,
   summarize,
   VERDICT_LABELS,
   VERDICTS,
@@ -34,6 +34,7 @@ const OUTCOME_COLORS: Record<Outcome, string> = {
   merged_factory: "bg-viz-blue",
   merged_owner: "bg-viz-aqua",
   handed_over: "bg-viz-yellow",
+  reverted: "bg-viz-magenta",
   stopped: "bg-viz-violet",
   failed: "bg-viz-red",
   in_progress: "bg-viz-gray",
@@ -146,10 +147,13 @@ export function Analytics({
   // Days are the owner's, so the browser's zone; the server render reads UTC until hydration.
   const timeZone = useAfterHydration(() => Intl.DateTimeFormat().resolvedOptions().timeZone, "UTC");
 
+  // Every registered repo, and any other with a job, a run or a decision in the range; counts are jobs claimed.
   const options = useMemo(() => {
-    const { inRange } = rangeOf({ now, days, timeZone });
-    return repoOptions(registry, facts.jobs.filter((j) => inRange(j.claimedAt)));
-  }, [registry, facts.jobs, now, days, timeZone]);
+    const counts = rangeRepos(facts, { now, days, timeZone });
+    const registered = repoOptions(registry, []).map((o) => ({ ...o, jobs: counts.get(o.repo) ?? 0 }));
+    const others = [...counts].filter(([r]) => !registered.some((o) => o.repo === r)).map(([repo, jobs]) => ({ repo, name: repoName(repo), jobs }));
+    return [...registered, ...others].sort((x, y) => x.name.localeCompare(y.name));
+  }, [registry, facts, now, days, timeZone]);
   const [repoChoice, pickRepo] = useRepoFilter(currentRepo);
   const repo = options.some((o) => o.repo === repoChoice) ? repoChoice : null;
   const a = useMemo(() => summarize(facts, { days, now, timeZone, repo }), [facts, days, now, timeZone, repo]);
@@ -191,7 +195,7 @@ export function Analytics({
               <Section id="outcomes" title="Outcomes" description="Jobs claimed in the range, by the day of their latest attempt's claim, and where each stands now.">
                 <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
                   <Tile label="Claimed" value={a.claimed} note={`${a.totals.in_progress} still in progress`} />
-                  <Tile label="Merged" value={a.totals.merged_factory + owner} note={`${a.totals.merged_factory} by the factory · ${owner} by you`} />
+                  <Tile label="Merged" value={a.totals.merged_factory + owner} note={`${a.totals.merged_factory} by the factory · ${owner} by you${a.totals.reverted ? ` · ${a.totals.reverted} more reverted` : ""}`} />
                   <Tile
                     label="Success rate"
                     value={a.success.rate === null ? none : percent(a.success.rate)}

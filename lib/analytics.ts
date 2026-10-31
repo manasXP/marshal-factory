@@ -1,9 +1,10 @@
 import type { AgentRow, JobRow, RunRow } from "../db/schema";
-import { attemptBranch } from "./factory";
-import { harnessLabel } from "./harness";
+import { attemptBranch, parseBranch } from "./factory";
+import { harnessLabel, type Harness } from "./harness";
 import { inboxKind } from "./inbox";
 import { blockedReason, mergeDecisionSchema, REVIEW_LABEL } from "./merge-decision";
-import { costKnown, hasTokens, knownCostUsd } from "./pricing";
+import { hasTokens, knownCostUsd } from "./pricing";
+import type { BranchCost } from "./spend";
 
 // The analytics page: what the factory finished, what it cost, how long it took and how often it
 // merged on its own. The server turns rows into facts (plain numbers, so they reach the browser);
@@ -17,13 +18,14 @@ export const DEFAULT_RANGE: RangeDays = 30;
 export const parseRange = (raw: unknown): RangeDays => RANGES.find((days) => String(days) === raw) ?? DEFAULT_RANGE;
 
 /** Where a job stands now, for the jobs claimed in the range. Its current attempt decides. */
-export const OUTCOMES = ["merged_factory", "merged_owner", "handed_over", "stopped", "failed", "in_progress"] as const;
+export const OUTCOMES = ["merged_factory", "merged_owner", "handed_over", "reverted", "stopped", "failed", "in_progress"] as const;
 export type Outcome = (typeof OUTCOMES)[number];
 
 export const OUTCOME_LABELS: Record<Outcome, string> = {
   merged_factory: "Merged by the factory",
   merged_owner: "Merged by you",
   handed_over: "Handed over",
+  reverted: "Reverted after merge",
   stopped: "Stopped",
   failed: "Failed",
   in_progress: "In progress",
@@ -36,6 +38,7 @@ const parseDecision = (value: unknown) => mergeDecisionSchema.safeParse(value).d
 
 type OutcomeJob = Pick<JobRow, "key" | "stage" | "stage_at" | "updated_at" | "pr_url" | "merge_decision" | "dismissed_at" | "stop" | "execution">;
 
+/** `mergedBy` is set for every merge, a reverted one too. */
 export function jobOutcome(job: OutcomeJob): { outcome: Outcome; mergedBy: MergedBy | null } {
   const decision = parseDecision(job.merge_decision);
   switch (job.stage) {
@@ -44,6 +47,9 @@ export function jobOutcome(job: OutcomeJob): { outcome: Outcome; mergedBy: Merge
       // A merge recorded before `via` was kept is the owner's when an approval is on the decision.
       const via = merged && (merged.via ?? (decision.approvedBy ? "inbox" : "auto"));
       const mergedBy: MergedBy = !via ? "github" : via === "auto" ? "factory" : "approval";
+      // Main went red after the merge: the watch reverted it, or tried to.
+      const state = decision?.watch?.state;
+      if (merged && (state === "reverted" || state === "revert_failed")) return { outcome: "reverted", mergedBy };
       return { outcome: mergedBy === "factory" ? "merged_factory" : "merged_owner", mergedBy };
     }
     case "failed":
@@ -75,58 +81,71 @@ export type JobFact = {
   outcome: Outcome;
   mergedBy: MergedBy | null;
   claimedAt: number;
-  /** Every attempt's runs and subagents, priced; unpriced tokens count 0 and make the cost unknown. */
+  /** Every attempt's spend, as lib/spend.ts's branchCosts prices it; unpriced tokens count 0. */
   usd: number;
-  /** costKnown: some usage was recorded and every row with tokens has a price. */
+  /** Every attempt that recorded runs has a known cost, and at least one did. */
   costKnown: boolean;
   /** The current attempt's first pr report, and its last one before the merge. */
   firstPrAt: number | null;
   lastPrAt: number | null;
   mergedAt: number | null;
-  /** The current attempt's spells in waiting; `end` is null while it still waits. */
+  /** The current attempt's spells waiting on an answer; `end` is null while still unanswered. */
   waits: { start: number; end: number | null }[];
 };
 
 /** A stage report, from events: the job it moved, when, and to which stage. */
 export type StageReport = { job_key: string; at: Date; stage: string };
 
-type TokenRow = Parameters<typeof knownCostUsd>[0] & { model: string | null };
-
-const runsByJob = (runs: readonly RunRow[]) => {
-  const map = new Map<string, RunRow[]>();
-  for (const run of runs) if (run.job_key) map.set(run.job_key, [...(map.get(run.job_key) ?? []), run]);
+function groupInto<T>(rows: readonly T[], key: (row: T) => string | null) {
+  const map = new Map<string, T[]>();
+  for (const row of rows) {
+    const k = key(row);
+    if (k === null) continue;
+    const list = map.get(k);
+    if (list) list.push(row);
+    else map.set(k, [row]);
+  }
   return map;
-};
+}
 
-const agentsBySession = (agents: readonly AgentRow[]) => {
-  const map = new Map<string, AgentRow[]>();
-  for (const agent of agents) map.set(agent.session_id, [...(map.get(agent.session_id) ?? []), agent]);
-  return map;
-};
+/** A job's spend over its attempts' branches, from branchCosts; an attempt without runs adds nothing. */
+export function jobCost(job: Pick<JobRow, "key" | "attempt">, costs: Readonly<Record<string, BranchCost>>) {
+  const spent = Array.from({ length: job.attempt }, (_, i) => costs[attemptBranch(job.key, i + 1)]).filter((c) => c !== undefined);
+  return { usd: spent.reduce((sum, c) => sum + c.usd, 0), known: spent.length > 0 && spent.every((c) => c.known) };
+}
 
-function waitSpells(reports: readonly StageReport[], stillWaiting: boolean): JobFact["waits"] {
+/**
+ * Spells in waiting. One ends when the answer reached the thread (jobs.answered_at, set as the
+ * runner delivers it), else at the next report of another stage. Only the latest answer is kept,
+ * so an earlier spell ends at that report, the first sign the thread had its answer. A question
+ * reported after the answer starts a new spell; one reported again before it continues the spell.
+ */
+export function waitSpells(reports: readonly StageReport[], answeredAt: number | null, stillWaiting: boolean): JobFact["waits"] {
   const waits: JobFact["waits"] = [];
+  const answered = (start: number, by: number) => answeredAt !== null && answeredAt >= start && answeredAt <= by;
   let start: number | null = null;
   for (const report of reports) {
-    if (report.stage === "waiting") start ??= report.at.getTime();
-    else if (start !== null) {
-      waits.push({ start, end: report.at.getTime() });
+    const at = report.at.getTime();
+    if (report.stage === "waiting") {
+      if (start !== null && answered(start, at)) {
+        waits.push({ start, end: answeredAt });
+        start = at;
+      } else start ??= at;
+    } else if (start !== null) {
+      waits.push({ start, end: answered(start, at) ? answeredAt : at });
       start = null;
     }
   }
-  if (start !== null && stillWaiting) waits.push({ start, end: null });
+  if (start !== null && answeredAt !== null && answeredAt >= start) waits.push({ start, end: answeredAt });
+  else if (start !== null && stillWaiting) waits.push({ start, end: null });
   return waits;
 }
 
-/** `stages` are the jobs' stage reports that ingest didn't refuse. */
-export function jobFacts(jobs: readonly JobRow[], runs: readonly RunRow[], agents: readonly AgentRow[], stages: readonly StageReport[]): JobFact[] {
-  const byJob = runsByJob(runs);
-  const bySession = agentsBySession(agents);
-  const reportsByJob = new Map<string, StageReport[]>();
-  for (const report of stages) reportsByJob.set(report.job_key, [...(reportsByJob.get(report.job_key) ?? []), report]);
+/** `stages` are the jobs' stage reports that ingest didn't refuse; `costs` is branchCosts over every attempt's branch. */
+export function jobFacts(jobs: readonly JobRow[], stages: readonly StageReport[], costs: Readonly<Record<string, BranchCost>>): JobFact[] {
+  const reportsByJob = groupInto(stages, (r) => r.job_key);
   return jobs.map((job) => {
     const { outcome, mergedBy } = jobOutcome(job);
-    const rows: TokenRow[] = (byJob.get(job.key) ?? []).flatMap((run) => [run, ...(bySession.get(run.session_id) ?? [])]);
     const claimedAt = job.claimed_at.getTime();
     // A retry's claim moves claimed_at, so reports from before it belong to an earlier attempt.
     const reports = (reportsByJob.get(job.key) ?? []).filter((r) => r.at.getTime() >= claimedAt).sort((a, b) => a.at.getTime() - b.at.getTime());
@@ -134,6 +153,8 @@ export function jobFacts(jobs: readonly JobRow[], runs: readonly RunRow[], agent
     const mergedAt = job.stage !== "merged" ? null : merged ? Date.parse(merged.at) : (job.stage_at?.getTime() ?? null);
     const prs = reports.filter((r) => r.stage === "pr").map((r) => r.at.getTime());
     const prsBeforeMerge = mergedAt === null ? prs : prs.filter((at) => at <= mergedAt);
+    const answeredAt = job.answered_at && job.answered_at.getTime() >= claimedAt ? job.answered_at.getTime() : null;
+    const cost = jobCost(job, costs);
     return {
       key: job.key,
       title: job.title,
@@ -142,12 +163,12 @@ export function jobFacts(jobs: readonly JobRow[], runs: readonly RunRow[], agent
       outcome,
       mergedBy,
       claimedAt,
-      usd: rows.reduce((sum, row) => sum + (knownCostUsd(row, row.model) ?? 0), 0),
-      costKnown: costKnown(rows),
+      usd: cost.usd,
+      costKnown: cost.known,
       firstPrAt: prs[0] ?? null,
       lastPrAt: prsBeforeMerge.at(-1) ?? null,
       mergedAt,
-      waits: waitSpells(reports, job.stage === "waiting"),
+      waits: waitSpells(reports, answeredAt, job.stage === "waiting"),
     };
   });
 }
@@ -158,18 +179,37 @@ export type SpendFact = { jobKey: string; repo: string; at: number; harness: str
 /** Jobs keep the provider of their current attempt only, so an earlier attempt's harness is unknown. */
 export const UNKNOWN_HARNESS = "Unknown harness";
 
-export function spendFacts(jobs: readonly JobRow[], runs: readonly RunRow[], agents: readonly AgentRow[]): SpendFact[] {
-  const bySession = agentsBySession(agents);
+/** The name the rest of the panel gives a provider: the machines' reported name, else the driver's label. */
+export const harnessName = (provider: string, harnesses: readonly Harness[]) => harnesses.find((h) => h.id === provider)?.name ?? harnessLabel(provider);
+
+/** owner/name from a GitHub pull request URL. */
+export const prRepo = (url: string | null) => (url && /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/\d+/.exec(url)?.[1]) || null;
+
+/**
+ * `attemptRepos` maps `<key>:<attempt>` to the repo an attempt's evidence named. A run's repo is its
+ * PR's, else its attempt's evidence's, else the job's: runs.repo is only the checkout's folder name,
+ * and a retry may move the job to another repo.
+ */
+export function spendFacts(
+  jobs: readonly JobRow[],
+  runs: readonly RunRow[],
+  agents: readonly AgentRow[],
+  harnesses: readonly Harness[] = [],
+  attemptRepos: ReadonlyMap<string, string> = new Map(),
+): SpendFact[] {
+  const bySession = groupInto(agents, (a) => a.session_id);
   const jobOf = new Map(jobs.map((job) => [job.key, job]));
   return runs.flatMap((run) => {
     const job = run.job_key ? jobOf.get(run.job_key) : undefined;
     if (!job) return [];
-    const current = run.branch === attemptBranch(job.key, job.attempt);
-    const harness = current && job.provider ? harnessLabel(job.provider) : UNKNOWN_HARNESS;
-    const rows: TokenRow[] = [run, ...(bySession.get(run.session_id) ?? [])];
+    const branch = parseBranch(run.branch ?? undefined);
+    const attempt = branch?.key === job.key ? branch.attempt : null;
+    const harness = attempt === job.attempt && job.provider ? harnessName(job.provider, harnesses) : UNKNOWN_HARNESS;
+    const repo = prRepo(run.pr_url) ?? (attempt === null ? undefined : attemptRepos.get(`${job.key}:${attempt}`)) ?? job.repo;
+    const rows: (RunRow | AgentRow)[] = [run, ...(bySession.get(run.session_id) ?? [])];
     return rows.filter(hasTokens).map((row) => ({
       jobKey: job.key,
-      repo: job.repo,
+      repo,
       at: run.started_at.getTime(),
       harness,
       model: row.model ?? "unknown model",
@@ -190,44 +230,76 @@ export const VERDICT_LABELS: Record<Verdict, string> = {
 };
 
 /**
- * Reads a merge_decided audit row's detail, as runner/merge-service.ts writes it: the outcome,
- * then each reason, joined with " · ". Null for the rows that end a post-merge watch.
+ * Reads a merge_decided audit row's detail, as runner/merge-service.ts writes it: the outcome, then
+ * the reasons joined with " · ". `body` is everything after the outcome, unsplit, since a reason
+ * may contain " · " itself. Null for the rows that end a post-merge watch.
  */
-export function parseDecisionDetail(detail: string | null): { verdict: Verdict | "pending"; reasons: string[] } | null {
+export function parseDecisionDetail(detail: string | null): { verdict: Verdict | "pending"; body: string } | null {
   if (!detail) return null;
-  const [head = "", ...reasons] = detail.split(" · ");
-  if (head === "Merging (auto)") return { verdict: "merge", reasons };
-  if (head.startsWith("Would merge (")) return { verdict: "would_merge", reasons };
-  if (head === "Pending") return { verdict: "pending", reasons };
+  const sep = detail.indexOf(" · ");
+  const [head, body] = sep < 0 ? [detail, ""] : [detail.slice(0, sep), detail.slice(sep + 3)];
+  if (head === "Merging (auto)") return { verdict: "merge", body };
+  if (head.startsWith("Would merge (")) return { verdict: "would_merge", body };
+  if (head === "Pending") return { verdict: "pending", body };
   // Off decides nothing, so it hands over with no reason; trial and auto always give one.
-  if (head === "Hand over") return { verdict: reasons.length === 0 ? "off" : "handover", reasons };
+  if (head === "Hand over") return { verdict: body === "" ? "off" : "handover", body };
   return null;
 }
 
-/** A settled factory decision about one PR head, from the audit log. */
-export type DecisionFact = { jobKey: string; repo: string; at: number; head: string; verdict: Verdict; reasons: string[] };
+const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-const blocked = blockedReason("");
-
-/** The handover reasons lib/merge-decision.ts, lib/trusted-checks.ts and the merge service give, without their particulars. */
-const REASON_KINDS: readonly [(reason: string) => boolean, string][] = [
-  [(r) => r.startsWith("The agent isn't confident"), "The agent isn't confident"],
-  [(r) => r.startsWith("The agent didn't report an assessment"), "No assessment from the agent"],
-  [(r) => r.startsWith(`The issue has the "${REVIEW_LABEL}" label`), `The issue has the ${REVIEW_LABEL} label`],
-  [(r) => r.startsWith("A check failed on the latest commit"), "A check failed on the PR"],
-  [(r) => r.startsWith("The pull request conflicts"), "Conflicts with its base branch"],
-  [(r) => r.startsWith("Bugbot didn't complete"), "Bugbot didn't complete its review"],
-  [(r) => /^Bugbot has \d+ unresolved/.test(r), "Unresolved Bugbot findings"],
-  [(r) => r.startsWith("The pull request changes UI files"), "UI change without screenshots"],
-  [(r) => /^The pull request edits (the recipe|CI workflows|package\.json|the check scripts)/.test(r), "Edits what the checks trust"],
-  [(r) => r.startsWith("No checks defined"), "No checks defined for the repo"],
-  [(r) => r.startsWith("Checks failed at "), "The factory's checks failed"],
-  [(r) => r.startsWith("Not verified at "), "Not verified at the PR head"],
-  [(r) => / didn't finish within \d+ minutes\.$/.test(r), "Timed out waiting on checks"],
-  [(r) => r.startsWith(blocked), "GitHub refused the merge"],
+/** The handover reasons lib/merge-decision.ts, lib/trusted-checks.ts and the merge service give, by how each begins. */
+const REASON_KINDS: readonly [string, string][] = [
+  ["The agent isn't confident", "The agent isn't confident"],
+  ["The agent didn't report an assessment", "No assessment from the agent"],
+  [escape(`The issue has the "${REVIEW_LABEL}" label`), `The issue has the ${REVIEW_LABEL} label`],
+  ["A check failed on the latest commit", "A check failed on the PR"],
+  ["The pull request conflicts", "Conflicts with its base branch"],
+  ["Bugbot didn't complete", "Bugbot didn't complete its review"],
+  ["Bugbot has \\d+ unresolved", "Unresolved Bugbot findings"],
+  ["The pull request changes UI files", "UI change without screenshots"],
+  ["The pull request edits (?:the recipe|CI workflows|package\\.json|the check scripts)", "Edits what the checks trust"],
+  ["No checks defined", "No checks defined for the repo"],
+  ["Checks failed at ", "The factory's checks failed"],
+  ["Not verified at ", "Not verified at the PR head"],
+  ["[^·]*? didn't finish within \\d+ minutes\\.", "Timed out waiting on checks"],
+  [escape(blockedReason("")), "GitHub refused the merge"],
 ];
+const AT_START = REASON_KINDS.map(([pattern, kind]) => [new RegExp(`^${pattern}`), kind] as const);
+const IN_DETAIL = REASON_KINDS.map(([pattern, kind]) => [new RegExp(`(?:^| · )${pattern}`), kind] as const);
 
-export const reasonKind = (reason: string) => REASON_KINDS.find(([matches]) => matches(reason))?.[1] ?? "Other";
+export const reasonKind = (reason: string) => AT_START.find(([re]) => re.test(reason))?.[1] ?? "Other";
+
+/** The kinds of one decision's reasons, each once. */
+export const reasonKinds = (reasons: readonly string[]) => [...new Set(reasons.map(reasonKind))];
+
+/** The kinds in an audit detail's reasons, each once, matched where a reason begins; Other when it names none. */
+export function detailKinds(body: string) {
+  const kinds = IN_DETAIL.filter(([re]) => re.test(body)).map(([, kind]) => kind);
+  return kinds.length > 0 ? kinds : body ? ["Other"] : [];
+}
+
+/** A factory decision about one job's PR: the last that wasn't pending, as the audit log has it. */
+export type DecisionFact = { jobKey: string; repo: string; pr: string; at: number; verdict: Verdict; kinds: string[] };
+
+/** A merge_decided row, with the job it is about. */
+export type DecisionRow = { at: Date; head_sha: string; target: string; detail: string | null; job: Pick<JobRow, "key" | "repo" | "pr_url" | "merge_decision"> };
+
+/**
+ * The factory's decisions from merge_decided rows; the caller leaves out the handovers an
+ * approval's refused merge wrote. The reasons come from the job's stored decision when the row is
+ * that decision (same PR, head and time, no approval), else from the detail's text.
+ */
+export function decisionFacts(rows: readonly DecisionRow[]): DecisionFact[] {
+  return rows.flatMap(({ at, head_sha, target, detail, job }) => {
+    const parsed = parseDecisionDetail(detail);
+    if (!parsed || parsed.verdict === "pending") return [];
+    const stored = parseDecision(job.merge_decision);
+    const same = stored && !stored.approvedBy && job.pr_url === target && (stored.headSha ?? "") === head_sha && Date.parse(stored.evaluatedAt) === at.getTime();
+    const kinds = parsed.verdict !== "handover" ? [] : same ? reasonKinds(stored.reasons) : detailKinds(parsed.body);
+    return [{ jobKey: job.key, repo: prRepo(target) ?? job.repo, pr: target, at: at.getTime(), verdict: parsed.verdict, kinds }];
+  });
+}
 
 // --- summarizing for a range, in the browser's time zone
 
@@ -279,9 +351,6 @@ function shares(rows: readonly SpendFact[], label: (row: SpendFact) => string): 
   return [...map.values()].sort((a, b) => b.usd - a.usd || a.label.localeCompare(b.label));
 }
 
-export const TOP_JOBS = 10;
-export const TOP_REASONS = 8;
-
 /** The range's days and whether a time falls on one of them. */
 export function rangeOf({ now, days: count, timeZone }: Omit<Scope, "repo">) {
   const days = rangeDays(now, count, timeZone);
@@ -289,6 +358,21 @@ export function rangeOf({ now, days: count, timeZone }: Omit<Scope, "repo">) {
   const [first, last] = [days[0]!, days.at(-1)!];
   return { days, keyOf, inRange: (ms: number) => keyOf(ms) >= first && keyOf(ms) <= last };
 }
+
+/** Every repo with a job claimed, a run started or a decision made in the range, and how many jobs it claimed. */
+export function rangeRepos(facts: AnalyticsFacts, scope: Omit<Scope, "repo">) {
+  const { inRange } = rangeOf(scope);
+  const jobs = new Map<string, number>();
+  for (const j of facts.jobs) if (inRange(j.claimedAt)) jobs.set(j.repo, (jobs.get(j.repo) ?? 0) + 1);
+  for (const s of facts.spend) if (inRange(s.at)) jobs.set(s.repo, jobs.get(s.repo) ?? 0);
+  for (const d of facts.decisions) if (inRange(d.at)) jobs.set(d.repo, jobs.get(d.repo) ?? 0);
+  return jobs;
+}
+
+export const TOP_JOBS = 10;
+export const TOP_REASONS = 8;
+
+const isMerged = (j: JobFact) => j.outcome === "merged_factory" || j.outcome === "merged_owner";
 
 export function summarize(facts: AnalyticsFacts, scope: Scope) {
   const { days, keyOf, inRange } = rangeOf(scope);
@@ -302,10 +386,11 @@ export function summarize(facts: AnalyticsFacts, scope: Scope) {
   for (const job of jobs) {
     perDay.get(keyOf(job.claimedAt))![job.outcome]++;
     totals[job.outcome]++;
-    if (job.mergedBy) mergedBy[job.mergedBy]++;
+    if (isMerged(job)) mergedBy[job.mergedBy!]++;
   }
+  // A reverted merge ended, but not in success.
   const merged = totals.merged_factory + totals.merged_owner;
-  const ended = merged + totals.failed + totals.stopped;
+  const ended = merged + totals.reverted + totals.failed + totals.stopped;
 
   // Spend: every run with tokens that started in the range, on the day it started.
   const spendRows = facts.spend.filter((s) => inRepo(s.repo) && inRange(s.at));
@@ -315,28 +400,28 @@ export function summarize(facts: AnalyticsFacts, scope: Scope) {
     if (row.usd === null) day.unpriced++;
     else day.usd += row.usd;
   }
-  const mergedJobs = jobs.filter((j) => j.mergedBy !== null);
+  const mergedJobs = jobs.filter(isMerged);
   const pricedMerged = mergedJobs.filter((j) => j.costKnown);
 
-  // Speed: the same jobs as outcomes.
+  // Speed: the same jobs as outcomes; a reverted merge still took its time to merge.
   const span = (from: number | null, to: number | null) => (from !== null && to !== null && to >= from ? [to - from] : []);
-  const prToMerge = (only: (j: JobFact) => boolean) => durations(mergedJobs.filter(only).flatMap((j) => span(j.firstPrAt, j.mergedAt)));
+  const everMerged = jobs.filter((j) => j.mergedAt !== null);
+  const prToMerge = (only: (j: JobFact) => boolean) => durations(everMerged.filter(only).flatMap((j) => span(j.firstPrAt, j.mergedAt)));
   const waits = jobs.flatMap((j) => j.waits);
 
-  // Autonomy: per PR head, the last settled decision the factory made in the range.
-  const lastPerHead = new Map<string, DecisionFact>();
+  // Autonomy: per job and PR, the last decision the factory made in the range.
+  const lastPerPr = new Map<string, DecisionFact>();
   for (const d of facts.decisions) {
     if (!inRepo(d.repo) || !inRange(d.at)) continue;
-    const id = `${d.jobKey}\n${d.head}`;
-    const seen = lastPerHead.get(id);
-    if (!seen || d.at >= seen.at) lastPerHead.set(id, d);
+    const id = `${d.jobKey}\n${d.pr}`;
+    const seen = lastPerPr.get(id);
+    if (!seen || d.at >= seen.at) lastPerPr.set(id, d);
   }
-  const decisions = [...lastPerHead.values()];
+  const decisions = [...lastPerPr.values()];
   const verdicts = Object.fromEntries(VERDICTS.map((v) => [v, decisions.filter((d) => d.verdict === v).length])) as Record<Verdict, number>;
   const handovers = decisions.filter((d) => d.verdict === "handover");
   const reasonCounts = new Map<string, number>();
-  // A decision counts once per kind, however many of its reasons share it.
-  for (const d of handovers) for (const kind of new Set(d.reasons.map(reasonKind))) reasonCounts.set(kind, (reasonCounts.get(kind) ?? 0) + 1);
+  for (const d of handovers) for (const kind of d.kinds) reasonCounts.set(kind, (reasonCounts.get(kind) ?? 0) + 1);
 
   return {
     days,
@@ -369,7 +454,7 @@ export function summarize(facts: AnalyticsFacts, scope: Scope) {
       prToMergeOwner: prToMerge((j) => j.mergedBy !== "factory"),
       answerWait: { ...durations(waits.flatMap((w) => span(w.start, w.end))), open: waits.filter((w) => w.end === null).length },
       reviewWait: {
-        ...durations(mergedJobs.filter((j) => j.mergedBy !== "factory").flatMap((j) => span(j.lastPrAt, j.mergedAt))),
+        ...durations(everMerged.filter((j) => j.mergedBy !== "factory").flatMap((j) => span(j.lastPrAt, j.mergedAt))),
         open: totals.handed_over,
       },
     },
