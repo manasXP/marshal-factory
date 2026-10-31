@@ -66,15 +66,19 @@ export function PanelHeader({ title, jobView, actions }: { title: string; jobVie
 /** One key and what it does, for the footer's hints. */
 export type KeyHint = { keys: readonly string[]; label: string };
 
-/** The page's hairline footer: a summary on the left, then how fresh the data is and the page's keys. */
-export function PanelFooter({ status, note, summary, keys = [] }: { status: FeedStatus; note?: string; summary?: ReactNode; keys?: readonly KeyHint[] }) {
+/** The page's hairline footer: a summary on the left, then how fresh the data is (none for a page without a live feed) and the page's keys. */
+export function PanelFooter({ status, note, summary, keys = [] }: { status?: FeedStatus; note?: string; summary?: ReactNode; keys?: readonly KeyHint[] }) {
   return (
     <footer className="flex h-10 shrink-0 items-center gap-3 border-t px-4 text-xs text-muted-foreground md:px-5">
       {summary && <span className="min-w-0 truncate tabular-nums">{summary}</span>}
       <span className="ms-auto flex shrink-0 items-center gap-1.5">
-        <span className={cn("size-1.5 shrink-0 rounded-full", STATUS[status].dot)} />
-        {STATUS[status].label}
-        {note && ` · ${note}`}
+        {status && (
+          <>
+            <span className={cn("size-1.5 shrink-0 rounded-full", STATUS[status].dot)} />
+            {STATUS[status].label}
+          </>
+        )}
+        {note && `${status ? " · " : ""}${note}`}
       </span>
       <span className="hidden items-center gap-3 lg:flex">
         {[...keys, { keys: ["["], label: "sidebar" }].map(({ keys: combo, label }) => (

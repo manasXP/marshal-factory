@@ -1,6 +1,6 @@
 "use client";
 
-import { ActivityIcon, FolderGit2Icon, InboxIcon, KanbanIcon, ListOrderedIcon, type LucideIcon, PanelLeftIcon, ServerIcon, SettingsIcon } from "lucide-react";
+import { ActivityIcon, ChartColumnIcon, FolderGit2Icon, InboxIcon, KanbanIcon, ListOrderedIcon, type LucideIcon, PanelLeftIcon, ServerIcon, SettingsIcon } from "lucide-react";
 import { LayoutGroup, MotionConfig, motion } from "motion/react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 /** The layout reads this cookie, so a reload keeps the rail collapsed. */
 export const COLLAPSED_COOKIE = "sidebar_state";
 
-type NavItem = { href: "/inbox" | "/" | "/queue" | "/activity" | "/machines" | "/repositories" | "/settings"; label: string; icon: LucideIcon };
+type NavItem = { href: "/inbox" | "/" | "/queue" | "/analytics" | "/activity" | "/machines" | "/repositories" | "/settings"; label: string; icon: LucideIcon };
 
 /** The jobs come first, led by the inbox of jobs that need the owner. */
 const NAV: readonly (readonly NavItem[])[] = [
@@ -23,6 +23,7 @@ const NAV: readonly (readonly NavItem[])[] = [
     { href: "/inbox", label: "Inbox", icon: InboxIcon },
     { href: "/", label: "Jobs", icon: KanbanIcon },
     { href: "/queue", label: "Queue", icon: ListOrderedIcon },
+    { href: "/analytics", label: "Analytics", icon: ChartColumnIcon },
   ],
   [
     { href: "/activity", label: "Other activity", icon: ActivityIcon },
