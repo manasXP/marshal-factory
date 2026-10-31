@@ -40,6 +40,14 @@ On the Mac that runs the factory:
 
 These steps set up one factory: one Neon project, one panel, and one Mac running the runner. Do them in order. Several steps depend on values an earlier step creates.
 
+After step 1 and the Linear setup in step 3, the setup wizard can do the rest:
+
+```sh
+bun scripts/setup.ts
+```
+
+It asks for your email, the Linear key and team and the panel's URL, and generates the secrets. It then creates and deploys the Neon backend, creates the GitHub App and the Linear webhook, and adds the panel's variables to Vercel from `.env.local`. It also sets the Ignored Build Step, trusts the panel's domain in Neon Auth, creates your owner account and installs the runner. Last, it runs the doctor. Steps that are already done are skipped, so after a failure you fix what it names and run it again. It refuses a `.env.local` with a line that isn't `NAME=value`, which is what a pasted token that wrapped onto a second line leaves, and a pasted key with a line break in it. The steps below are what it does, for doing them by hand or seeing what went wrong.
+
 ### 1. Clone the factory
 
 ```sh
@@ -179,7 +187,13 @@ neon neon-auth domain add "$(grep '^FACTORY_PANEL_URL=' .env.local | cut -d= -f2
 
 If the URL Vercel gave the panel differs from `FACTORY_PANEL_URL`, fix it in `.env.local` and run the `neon deploy` command from step 4 again, with the real webhook secret from step 6 in place of `pending`, so Realtime trusts the right origin.
 
-Then create your owner account. Sign-up is off by default. The [owner account steps](docs/operations.md#panel-access-and-deploys) turn it on briefly, so you can register with an address from `FACTORY_OWNER_EMAILS` and confirm it with the emailed code.
+Then create your owner account:
+
+```sh
+bun scripts/create-owner.ts
+```
+
+It creates the first address in `FACTORY_OWNER_EMAILS` in Neon Auth (`--email` picks another from the list), and Neon Auth emails it a code. Enter the code and choose the panel password in the terminal. Sign-up stays off throughout. Then sign in at `/auth/sign-in` on the panel. The [owner account steps](docs/operations.md#panel-access-and-deploys) have the details.
 
 ### 9. Start the runner
 
@@ -326,6 +340,10 @@ bun scripts/rollout.ts
 ```
 
 It waits for Vercel's production deploy (which runs the migrations), stops the runner, pulls, migrates, redeploys the ingest Function and rebuilds the sandbox image when they changed, and starts the runner again. [docs/operations.md](docs/operations.md#rolling-out-a-merge) has the steps and the opt-in canary.
+
+## Moving to another machine
+
+`bun scripts/move.ts pack <bundle>` on the old machine and `bun scripts/move.ts unpack <bundle>` on the new one carry the runner's files over in one encrypted bundle, and keep the machine id, so the factory sees the same machine. Pause new work and let this machine's jobs finish first. [docs/moving.md](docs/moving.md) has what moves, the order, and the move into the [runner container](docs/runner-container.md).
 
 ## Troubleshooting
 
