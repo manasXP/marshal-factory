@@ -33,6 +33,13 @@ export function fileIn(source: JobSource) {
   return file;
 }
 
+/** Takes queued work out of the queue at its source, from the panel; throws for a source that cannot. */
+export async function dequeue(source: JobSource, externalId: string) {
+  const { dequeue: remove } = sourceFor(source);
+  if (!remove) throw new Error(`the ${source} source cannot take work out of the queue`);
+  await remove(externalId);
+}
+
 /**
  * Adds a source beside the shipped ones. Only regressions call it, with a fake source that proves
  * the runner needs nothing source-specific; a real source is added to SOURCES and SOURCE_SHAPES.

@@ -1,6 +1,6 @@
 "use client";
 
-import { ActivityIcon, FolderGit2Icon, InboxIcon, KanbanIcon, type LucideIcon, PanelLeftIcon, ServerIcon, SettingsIcon } from "lucide-react";
+import { ActivityIcon, FolderGit2Icon, InboxIcon, KanbanIcon, ListOrderedIcon, type LucideIcon, PanelLeftIcon, ServerIcon, SettingsIcon } from "lucide-react";
 import { LayoutGroup, MotionConfig, motion } from "motion/react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -15,13 +15,14 @@ import { cn } from "@/lib/utils";
 /** The layout reads this cookie, so a reload keeps the rail collapsed. */
 export const COLLAPSED_COOKIE = "sidebar_state";
 
-type NavItem = { href: "/inbox" | "/" | "/activity" | "/machines" | "/repositories" | "/settings"; label: string; icon: LucideIcon };
+type NavItem = { href: "/inbox" | "/" | "/queue" | "/activity" | "/machines" | "/repositories" | "/settings"; label: string; icon: LucideIcon };
 
 /** The jobs come first, led by the inbox of jobs that need the owner. */
 const NAV: readonly (readonly NavItem[])[] = [
   [
     { href: "/inbox", label: "Inbox", icon: InboxIcon },
     { href: "/", label: "Jobs", icon: KanbanIcon },
+    { href: "/queue", label: "Queue", icon: ListOrderedIcon },
   ],
   [
     { href: "/activity", label: "Other activity", icon: ActivityIcon },
@@ -63,11 +64,13 @@ function RailTip({ collapsed, label, children }: { collapsed: boolean; label: Re
 function Nav({
   collapsed,
   inboxCount,
+  queueBadge,
   onNavigate,
   onToggle,
 }: {
   collapsed: boolean;
   inboxCount: ReactNode;
+  queueBadge: ReactNode;
   onNavigate?: () => void;
   onToggle?: () => void;
 }) {
@@ -100,6 +103,7 @@ function Nav({
                     <Icon className="size-4 shrink-0" />
                     <span className={cn("min-w-0 flex-1 truncate", fade)}>{label}</span>
                     {href === "/inbox" && inboxCount}
+                    {href === "/queue" && queueBadge}
                   </Link>
                 </RailTip>
               );
@@ -133,7 +137,7 @@ function Nav({
 }
 
 /** The app frame: a hairline rail on the left that collapses with `[`, and a column each page fills with its header, content and footer. */
-export function PanelShell({ defaultCollapsed, inboxCount, children }: { defaultCollapsed: boolean; inboxCount: ReactNode; children: ReactNode }) {
+export function PanelShell({ defaultCollapsed, inboxCount, queueBadge, children }: { defaultCollapsed: boolean; inboxCount: ReactNode; queueBadge: ReactNode; children: ReactNode }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const [navOpen, setNavOpen] = useState(false);
 
@@ -164,12 +168,12 @@ export function PanelShell({ defaultCollapsed, inboxCount, children }: { default
               transition={spring}
               className="hidden shrink-0 overflow-hidden border-e md:block"
             >
-              <Nav collapsed={collapsed} inboxCount={inboxCount} onToggle={() => setCollapsed((c) => !c)} />
+              <Nav collapsed={collapsed} inboxCount={inboxCount} queueBadge={queueBadge} onToggle={() => setCollapsed((c) => !c)} />
             </motion.aside>
             <Sheet open={navOpen} onOpenChange={setNavOpen}>
               <SheetPopup side="left" className="w-64 max-w-[85%] md:hidden">
                 <SheetTitle className="sr-only">Navigation</SheetTitle>
-                <Nav collapsed={false} inboxCount={inboxCount} onNavigate={() => setNavOpen(false)} />
+                <Nav collapsed={false} inboxCount={inboxCount} queueBadge={queueBadge} onNavigate={() => setNavOpen(false)} />
               </SheetPopup>
             </Sheet>
             <main className="flex min-h-0 min-w-0 flex-1 flex-col">{children}</main>
