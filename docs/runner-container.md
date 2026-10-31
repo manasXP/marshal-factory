@@ -39,12 +39,7 @@ For more throughput, raise `factory.maxInFlight` and `factory.sandbox.maxParalle
 
 ## Moving from the Mac
 
-Jobs, and the post-merge watch, stay with the machine that claimed them. Drain the Mac before you start the container:
-
-1. Pause the factory on the **Queue** page, so the Mac claims nothing new.
-2. Wait until the Mac shows no work in flight under **Machines**, and any merge it made has finished its post-merge watch (`postMergeWatchMinutes`, 60 by default).
-3. Stop the LaunchAgent: `launchctl bootout gui/$(id -u)/com.marshal-factory.runner`.
-4. Start the container, then resume the factory.
+Jobs, and the post-merge watch, stay with the machine that claimed them. Drain the Mac and move it with `bun scripts/move.ts` ([Moving to another machine](moving.md#move-into-the-runner-container)): `pack` on the Mac refuses while it has work only it can finish, stops the LaunchAgent and pins the Mac's machine id. `unpack --home ./.runner-home` on the host fills the runner home, `.modal.toml` included, so the container carries on as the same machine. Resume new work once the container is up.
 
 ## Updating
 

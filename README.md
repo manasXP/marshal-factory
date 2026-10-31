@@ -333,6 +333,10 @@ bun scripts/rollout.ts
 
 It waits for Vercel's production deploy (which runs the migrations), stops the runner, pulls, migrates, redeploys the ingest Function and rebuilds the sandbox image when they changed, and starts the runner again. [docs/operations.md](docs/operations.md#rolling-out-a-merge) has the steps and the opt-in canary.
 
+## Moving to another machine
+
+`bun scripts/move.ts pack <bundle>` on the old machine and `bun scripts/move.ts unpack <bundle>` on the new one carry the runner's files over in one encrypted bundle, and keep the machine id, so the factory sees the same machine. Pause new work and let this machine's jobs finish first. [docs/moving.md](docs/moving.md) has what moves, the order, and the move into the [runner container](docs/runner-container.md).
+
 ## Troubleshooting
 
 - **Start with the doctor**: `bun scripts/doctor.ts` in the live checkout checks every part of the setup and names the fix for what's wrong.
