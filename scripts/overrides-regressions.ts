@@ -235,7 +235,7 @@ assert.equal(harnessLine(boardCards([{ ...cardJob, provider: "claudeAgent" } as 
 const owner = { email: OWNER, emailVerified: true };
 const requestId = "6f0c3f8e-1f4b-4a52-9f0e-2d7c5a8b9c11";
 const filed: unknown[] = [];
-const fileDeps = { user: async () => owner, file: async (d: unknown) => (filed.push(d), { key: "FAC-1", url: "u" }), harnesses: async () => harnesses, registry: async () => [] };
+const fileDeps = { user: async () => owner, file: async (d: unknown) => (filed.push(d), { key: "FAC-1", url: "u" }), harnesses: async () => harnesses, registry: async () => [], recordFiling: async () => {} };
 await createJob(fileDeps, { title: "Title", description: "", requestId });
 assert.equal((filed[0] as { labels?: unknown }).labels, undefined, "Settings default files no override label");
 await createJob(fileDeps, { title: "Title", description: "", requestId, provider: "codex", execution: "modal" });

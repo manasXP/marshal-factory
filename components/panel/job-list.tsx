@@ -14,6 +14,7 @@ import { toastManager } from "@/components/ui/toast";
 import type { AgentRow, MachineRow } from "@/db/schema";
 import { isFinished } from "@/lib/archive";
 import { STAGES, type Stage } from "@/lib/events";
+import { requesterName } from "@/lib/requester-filter";
 import { stopLine } from "@/lib/stop";
 import { cn } from "@/lib/utils";
 import { harnessLine, showsDecision, whereLine, type BoardCard } from "./cards";
@@ -40,11 +41,13 @@ function Row({
   open,
   onFocus,
   repoLabels,
+  showRequester,
 }: {
   card: BoardCard;
   href: string | null;
   machineName: string | null;
   repoLabels: ReadonlyMap<string, string> | undefined;
+  showRequester: boolean;
   agentsBySession: Map<string, AgentRow[]>;
   open: boolean;
   onFocus: () => void;
@@ -70,6 +73,11 @@ function Row({
         {card.latest?.status === "active" && <Spinner className="size-3 shrink-0 text-muted-foreground" />}
       </span>
       {repoLabels && <span className="hidden w-28 shrink-0 truncate text-xs text-muted-foreground @2xl:block">{card.repo && repoLabels.get(card.repo)}</span>}
+      {showRequester && (
+        <span className="hidden w-24 shrink-0 truncate text-xs text-muted-foreground @2xl:block" title="Requested by">
+          {card.requestedBy && requesterName(card.requestedBy)}
+        </span>
+      )}
       <span className={cn("hidden w-32 shrink-0 truncate text-xs @sm:block @xl:w-56", decision?.tone)}>{decision?.text}</span>
       <span className="hidden w-44 shrink-0 @3xl:block">{card.evidence && <EvidenceLine line={card.evidence} />}</span>
       <span className="hidden w-44 shrink-0 truncate text-xs text-muted-foreground @4xl:block">{where}</span>
@@ -107,6 +115,7 @@ export function JobList({
   selected,
   machines,
   repoLabels,
+  showRequester = false,
   archived = false,
 }: {
   cards: readonly BoardCard[];
@@ -115,6 +124,8 @@ export function JobList({
   machines: ReadonlyMap<string, MachineRow>;
   /** Each repo's short name, while more than one repo has jobs; undefined shows no repo. */
   repoLabels?: ReadonlyMap<string, string>;
+  /** Name who each job is for; on while more than one person has jobs. */
+  showRequester?: boolean;
   /** The archive: its rows are restored instead of archived. */
   archived?: boolean;
 }) {
@@ -243,6 +254,7 @@ export function JobList({
                             open={isOpen(card)}
                             onFocus={() => setCursor(card.id)}
                             repoLabels={repoLabels}
+                            showRequester={showRequester}
                           />
                         </motion.li>
                       ))}

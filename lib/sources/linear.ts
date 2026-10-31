@@ -278,6 +278,8 @@ export function createLinearAdapter(load: () => LinearDeps | Promise<LinearDeps>
           labels: n.labels.nodes.map((l) => l.name),
           labelGroups: n.labels.nodes.flatMap((l) => (l.parent ? [{ name: l.name, group: l.parent.name }] : [])),
         },
+        // The panel files as the key's own user, so job_filings, read before the creator, names the person.
+        requester: { assignee: n.assignee?.email ?? null, creator: n.creator?.email ?? null },
       }));
     },
 

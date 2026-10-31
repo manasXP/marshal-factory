@@ -194,6 +194,12 @@ export const jobs = pgTable(
     /** When the owner archived the finished job off the panel; a stage newer than this shows it again. See lib/archive.ts. */
     archived_at: ts("archived_at"),
     archived_by: text("archived_by"),
+    /**
+     * Who the job is for, as of its latest claim: the source's assignee, else whoever filed it from
+     * the panel (job_filings), else the issue's creator. An email, or a GitHub login where the source
+     * has no email; null when the source names nobody. See lib/requester.ts.
+     */
+    requested_by: text("requested_by"),
     claimed_at: ts("claimed_at").notNull(),
     updated_at: ts("updated_at").notNull(),
   },
@@ -203,6 +209,18 @@ export const jobs = pgTable(
     check("jobs_id_check", sql`${t.id} = ${t.source}::text || ':' || ${t.external_id}`),
   ],
 );
+
+/**
+ * Who filed each job from the panel, by the job key the source gave it. The panel files with the
+ * factory's own Linear key or GitHub App, so the source names the factory as the issue's creator;
+ * the claim reads the filer here instead. See lib/requester.ts.
+ */
+export const jobFilings = pgTable("job_filings", {
+  key: text("key").primaryKey(),
+  /** The signed-in owner's email. */
+  filed_by: text("filed_by").notNull(),
+  filed_at: ts("filed_at").notNull(),
+});
 
 /**
  * Who holds each Codex login slot: a job or an onboarding agent run. The slot is the primary key,

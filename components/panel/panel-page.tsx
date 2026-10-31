@@ -19,7 +19,9 @@ import {
   sessionEventsQuery,
   sessionStagesQuery,
 } from "@/lib/live-queries";
+import { auth } from "@/lib/auth/server";
 import { REPO_FILTER_COOKIE, repoFilter } from "@/lib/repo-filter";
+import { mineOnly, REQUESTER_FILTER_COOKIE } from "@/lib/requester-filter";
 import { parseSessionId, runFeedPath } from "@/lib/run-links";
 import { readRegistry } from "@/lib/repositories";
 
@@ -41,16 +43,17 @@ async function loadDetail(sessionId: string): Promise<DetailProps> {
 }
 
 async function Panel({ view, searchParams }: { view: PanelView; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
-  const { run, job, view: rawView, repo, archived } = await searchParams;
+  const { run, job, view: rawView, repo, by, archived } = await searchParams;
   const sessionId = parseSessionId(typeof run === "string" ? run : undefined);
   // Not awaited: the page streams while the run's own feeds load, and the side panel waits for them on its own.
   const detail = sessionId ? { sessionId, data: loadDetail(sessionId) } : undefined;
-  const [jobs, runs, agents, machines, jar] = await Promise.all([
+  const [jobs, runs, agents, machines, jar, session] = await Promise.all([
     load(jobsQuery()),
     load(runsQuery()),
     load(agentsOverviewQuery()),
     load(machinesQuery()),
     cookies(),
+    auth.getSession(),
   ]);
   const jobView = parseJobView(rawView) ?? parseJobView(jar.get(JOB_VIEW_COOKIE)?.value) ?? "board";
   // After the loads, which check the owner.
@@ -60,6 +63,8 @@ async function Panel({ view, searchParams }: { view: PanelView; searchParams: Pr
       view={view}
       jobView={jobView}
       repo={repoFilter(repo, jar.get(REPO_FILTER_COOKIE)?.value)}
+      mine={mineOnly(by, jar.get(REQUESTER_FILTER_COOKIE)?.value)}
+      viewer={session.data?.user?.email ?? null}
       archived={view === "jobs" && archived === "1"}
       registry={registry.map((r) => ({ repo: r.repo, display_name: r.display_name, enabled: r.enabled, is_default: r.is_default }))}
       jobs={jobs}

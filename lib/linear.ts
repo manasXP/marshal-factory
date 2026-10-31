@@ -14,6 +14,9 @@ const issueSchema = z.object({
   createdAt: z.string(),
   state: z.object({ name: z.string(), type: z.string() }),
   labels: z.object({ nodes: z.array(z.object({ name: z.string(), parent: z.object({ name: z.string() }).nullish() })) }),
+  assignee: z.object({ email: z.string() }).nullish(),
+  /** Null for an issue an integration created. */
+  creator: z.object({ email: z.string() }).nullish(),
 });
 export type LinearIssue = z.infer<typeof issueSchema>;
 
@@ -118,7 +121,7 @@ export function linearClient(apiKey: string, { fetch: fetchImpl = realFetch, sle
             labels: { some: { name: { eqIgnoreCase: $label } } },
             state: { type: { eq: "unstarted" } }
           }) {
-            nodes { id identifier title url description createdAt state { name type } labels { nodes { name parent { name } } } }
+            nodes { id identifier title url description createdAt state { name type } labels { nodes { name parent { name } } } assignee { email } creator { email } }
           }
         }`,
         { team: teamKey, label },

@@ -168,7 +168,7 @@ assert.equal((await repos.makeDefaultRepo({ ...deps(), save: async () => {} }, {
 
 // New job: the issue always gets its Repository label, the default one when none is picked.
 const filed: { labels?: { group: string; name: string }[] }[] = [];
-const fileDeps = { user: async () => owner, file: async (d: (typeof filed)[number]) => (filed.push(d), { key: "FAC-1", url: "u" }), harnesses: async () => harnesses, registry: async () => registry };
+const fileDeps = { user: async () => owner, file: async (d: (typeof filed)[number]) => (filed.push(d), { key: "FAC-1", url: "u" }), harnesses: async () => harnesses, registry: async () => registry, recordFiling: async () => {} };
 const requestId = "6f0c3f8e-1f4b-4a52-9f0e-2d7c5a8b9c12";
 await createJob(fileDeps, { title: "Title", description: "", requestId });
 assert.deepEqual(filed[0]!.labels, [{ group: "Repository", name: "factory-demo" }], "the default repo is labeled too");

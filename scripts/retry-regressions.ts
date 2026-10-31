@@ -24,7 +24,7 @@ const deps = (user: typeof owner | null = owner) => ({
   db,
   user: async () => user,
   reply: async () => {},
-  newJob: { user: async () => user, harnesses: async () => [], registry: async () => [], file: async () => ({ key: "x", url: "u" }) },
+  newJob: { user: async () => user, harnesses: async () => [], registry: async () => [], file: async () => ({ key: "x", url: "u" }), recordFiling: async () => {} },
 });
 
 const row = async (key: string) => (await db.select().from(jobs).where(eq(jobs.key, key)))[0]!;
