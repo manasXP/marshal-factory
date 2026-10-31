@@ -11,6 +11,8 @@ import { HARNESS_GROUP, RUNS_ON_GROUP, RUNS_ON_LABELS } from "@/lib/ticket-overr
 // issue as the same override label a person would add, and so does the repo, default or not. GitHub
 // files the issue in the repo itself instead.
 
+const LINEAR_UPLOADS = "https://uploads.linear.app/";
+
 export type NewJobDeps = {
   user: () => Promise<SessionUser | null | undefined>;
   file: (draft: FileDraft, source: FilingSource) => Promise<FiledJob>;
@@ -29,6 +31,10 @@ export async function createJob(deps: NewJobDeps, input: unknown): Promise<NewJo
   const target = repo ? registry.find((r) => r.repo === repo) : defaultRepo(registry);
   if (repo && !target?.enabled) return { ok: false, status: 400, message: `${repo} is not an enabled repository.` };
   if (source === "github" && !target) return { ok: false, status: 400, message: "Pick the repository to file the GitHub issue in." };
+  // Linear's uploads need a Linear login, so neither GitHub's readers nor the agent could open them.
+  if (source === "github" && draft.description.includes(LINEAR_UPLOADS)) {
+    return { ok: false, status: 400, message: "Images uploaded to Linear can't go on a GitHub issue; remove them or file in Linear." };
+  }
   if (target) labels.push({ group: REPOSITORY_GROUP, name: repoLabel(registry, target) });
   if (provider) {
     const harness = (await deps.harnesses())?.find((h) => h.id === provider && h.enabled);

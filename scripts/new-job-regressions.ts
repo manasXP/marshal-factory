@@ -74,19 +74,18 @@ const draft = { title: "Show the item count", description: "On the weight sort b
 {
   // The GitHub adapter files an issue as the App, findable again by the request's marker.
   const issues: Issue[] = [];
-  const labelCalls: string[][] = [];
-  let failLabels = false;
+  const ensured: string[] = [];
+  let refuse: string | null = null;
   const client = {
     recentIssues: async () => [...issues].reverse(),
-    createIssue: async (_repo: string, title: string, body: string) => {
-      const issue: Issue = { number: issues.length + 1, title, body, html_url: `https://github.com/acme/web/issues/${issues.length + 1}`, state: "open", labels: [] };
+    ensureLabel: async (_repo: string, name: string) => {
+      if (name === refuse) throw new Error(`GitHub refused the label "${name}"`);
+      ensured.push(name);
+    },
+    createIssue: async (_repo: string, title: string, body: string, labels: readonly string[]) => {
+      const issue: Issue = { number: issues.length + 1, title, body, html_url: `https://github.com/acme/web/issues/${issues.length + 1}`, state: "open", labels: [...labels] };
       issues.push(issue);
       return issue;
-    },
-    addLabels: async (_repo: string, number: number, labels: readonly string[]) => {
-      if (failLabels) throw new Error("GitHub answered 502");
-      labelCalls.push([...labels]);
-      issues[number - 1]!.labels.push(...labels);
     },
   };
   const adapter = createGithubAdapter(() => ({ client: client as never, db: null as never, label: "factory", appLogin: () => "", repos: async () => [] }));
@@ -96,22 +95,33 @@ const draft = { title: "Show the item count", description: "On the weight sort b
   await assert.rejects(file({ ...draft }), /needs the repository/, "an issue needs its repo");
   assert.deepEqual(await file({ ...draft, repo: "acme/web", labels }), { key: "GH-acme-web-1", url: "https://github.com/acme/web/issues/1" }, "the issue is filed");
   assert.equal(issues[0]!.title, draft.title);
-  assert.match(issues[0]!.body!, new RegExp(`^${draft.description}\n\n<!-- marshal-factory:panel-job:${requestId} -->$`), "with the request's marker under the description");
-  assert.deepEqual(labelCalls[0], ["factory", "Harness: Codex", "Runs on: Cloud"], "with the factory label and GitHub-style overrides, and no Repository label");
+  assert.match(issues[0]!.body!, new RegExp(`^${draft.description}\\n\\n<!-- marshal-factory:panel-job:${requestId} -->$`), "with the request's marker under the description");
+  assert.deepEqual(issues[0]!.labels, ["factory", "Harness: Codex", "Runs on: Cloud"], "already labeled, with GitHub-style overrides and no Repository label");
+  assert.deepEqual(ensured, issues[0]!.labels, "each label made sure of before the issue exists");
+
+  issues[0]!.labels = ["Harness: Codex", "Runs on: Cloud"];
   assert.deepEqual(await file({ ...draft, repo: "acme/web", labels }), { key: "GH-acme-web-1", url: "https://github.com/acme/web/issues/1" }, "a second submit finds the first issue");
   assert.equal(issues.length, 1, "and files nothing new");
-  assert.equal(labelCalls.length, 1, "nor labels it again");
+  assert.deepEqual(issues[0]!.labels, ["Harness: Codex", "Runs on: Cloud"], "nor puts back a factory label the owner removed to stop it");
 
-  const second = "0b9d2f71-3c55-4e1a-8f6b-7a2c9e4d1f00";
-  failLabels = true;
-  await assert.rejects(file({ ...draft, requestId: second, repo: "acme/web" }), /502/, "a labeling failure is reported");
-  failLabels = false;
-  assert.deepEqual((await file({ ...draft, requestId: second, repo: "acme/web" })).key, "GH-acme-web-2", "a retry finds the unlabeled issue");
-  assert.deepEqual([issues.length, issues[1]!.labels], [2, ["factory"]], "and labels it instead of filing another");
+  refuse = "Harness: Codex";
+  await assert.rejects(file({ ...draft, requestId: "0b9d2f71-3c55-4e1a-8f6b-7a2c9e4d1f00", repo: "acme/web", labels }), /refused the label/, "a label GitHub refuses is reported");
+  assert.equal(issues.length, 1, "before any issue is filed");
+}
 
-  issues[1]!.labels = ["factory-failed"];
-  await file({ ...draft, requestId: second, repo: "acme/web" });
-  assert.deepEqual(issues[1]!.labels, ["factory-failed"], "a late retry does not requeue an issue the factory already gave up on");
+{
+  const filed: FileDraft[] = [];
+  const deps = {
+    user: async () => owner,
+    file: async (d: FileDraft) => (filed.push(d), { key: "GH-acme-web-1", url: "u" }),
+    harnesses,
+    registry: async () => [{ repo: "acme/web", display_name: null, enabled: true, is_default: true }] as never,
+  };
+  const withImage = { ...draft, description: "See ![screen.png](https://uploads.linear.app/org/abc/screen.png)" };
+  const refused = await createJob(deps, { ...withImage, source: "github" });
+  assert.deepEqual([refused.ok, !refused.ok && refused.status], [false, 400], "a GitHub job refuses images uploaded to Linear");
+  assert.equal((await createJob(deps, withImage)).ok, true, "which a Linear job keeps");
+  assert.equal(filed.length, 1);
 }
 
 {

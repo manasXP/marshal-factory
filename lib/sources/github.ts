@@ -125,8 +125,14 @@ export function issuesClient({ api, tokens }: { api: string; tokens: Pick<TokenS
     async removeLabel(repo: RepoName, number: number, label: string) {
       await request(repo, "DELETE", `/repos/${repo}/issues/${number}/labels/${encodeURIComponent(label)}`, { allow: [404] });
     },
-    async createIssue(repo: RepoName, title: string, body: string): Promise<Issue> {
-      return issueSchema.parse((await request(repo, "POST", `/repos/${repo}/issues`, { body: { title, body } })).json);
+    /** Creates the label unless the repo has it; an invalid name, such as one over 50 characters, throws. */
+    async ensureLabel(repo: RepoName, name: string) {
+      const { status, json } = await request(repo, "POST", `/repos/${repo}/labels`, { body: { name }, allow: [422] });
+      const exists = z.object({ errors: z.array(z.object({ code: z.string() })) }).safeParse(json).data?.errors.some((e) => e.code === "already_exists");
+      if (status === 422 && !exists) throw new GitHubError(`GitHub refused the label "${name}": ${JSON.stringify(json)}`, 422);
+    },
+    async createIssue(repo: RepoName, title: string, body: string, labels: readonly string[]): Promise<Issue> {
+      return issueSchema.parse((await request(repo, "POST", `/repos/${repo}/issues`, { body: { title, body, labels } })).json);
     },
     /** The repo's newest issues, open or closed: where a request that was filed moments ago is. */
     async recentIssues(repo: RepoName): Promise<Issue[]> {
@@ -413,20 +419,23 @@ export function createGithubAdapter(load: () => GithubDeps | Promise<GithubDeps>
     /**
      * Files the job as an issue in its repo with the factory label, as a person would; the App's
      * delivery or the next poll claims it. GitHub takes no client-chosen id, so the body carries the
-     * request's marker and a retry finds the issue among the repo's newest. The labels go on after
-     * the issue exists, since adding them creates any the repo is missing; a retry adds them again
-     * only while the issue has neither the factory label nor factory-failed.
+     * request's marker and a retry finds the issue among the repo's newest and returns it as it is.
+     * The labels are created first and the issue is created with them, so no issue is ever left
+     * without the factory label, and a retry never puts back one the owner removed to stop the job.
      */
     async file(draft) {
       const { client, label } = await deps();
       if (!draft.repo) throw new Error("a GitHub issue needs the repository to file it in");
       const repo = draft.repo as RepoName;
       const id = panelJobMarker(draft.requestId);
-      const found = (await client.recentIssues(repo)).find((i) => (i.body ?? "").includes(marker(id)));
-      const issue = found ?? (await client.createIssue(repo, draft.title, withMarker(id, draft.description)));
-      // The repository is the one the issue lives in, so its label would say nothing.
-      const overrides = (draft.labels ?? []).filter((l) => l.group !== OVERRIDE_GROUPS.repository).map((l) => `${l.group}: ${l.name}`);
-      if (!issue.labels.some((l) => same(l, label) || same(l, FAILED_LABEL))) await client.addLabels(repo, issue.number, [label, ...(draft.tags ?? []), ...overrides]);
+      let issue = (await client.recentIssues(repo)).find((i) => (i.body ?? "").includes(marker(id)));
+      if (!issue) {
+        // The repository is the one the issue lives in, so its label would say nothing.
+        const overrides = (draft.labels ?? []).filter((l) => l.group !== OVERRIDE_GROUPS.repository).map((l) => `${l.group}: ${l.name}`);
+        const labels = [label, ...(draft.tags ?? []), ...overrides];
+        for (const name of labels) await client.ensureLabel(repo, name);
+        issue = await client.createIssue(repo, draft.title, withMarker(id, draft.description), labels);
+      }
       return { key: issueKey(repo, issue.number), url: issue.html_url };
     },
 

@@ -26,11 +26,11 @@ export const allSources = (): SourceAdapter<JobSource>[] => Object.values(SOURCE
 const PANEL_SOURCE: JobSource = "linear";
 export const panelSource = () => sourceFor(PANEL_SOURCE);
 
-/** A source the panel files new jobs in; throws for one that cannot file. */
-export function filingSource(source: JobSource) {
-  const adapter = sourceFor(source);
-  if (!adapter.file) throw new Error(`the ${source} source cannot file jobs`);
-  return { ...adapter, file: adapter.file };
+/** How the panel files a new job in the source; throws for a source that cannot file. */
+export function fileIn(source: JobSource) {
+  const { file } = sourceFor(source);
+  if (!file) throw new Error(`the ${source} source cannot file jobs`);
+  return file;
 }
 
 /**

@@ -74,6 +74,8 @@ export function NewJobButton({ harnesses, repos }: { harnesses: readonly Harness
   const [open, setOpen] = useState(false);
   const [created, setCreated] = useState<Extract<NewJobOutcome, { ok: true }> | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  // A source that failed may still have filed the request, so a retry stays in that source.
+  const [sent, setSent] = useState(false);
   const [pending, startTransition] = useTransition();
   const form = useForm<NewJob>({ resolver: zodResolver(newJobSchema), defaultValues: blank() });
   const [images, setImages] = useState<JobImage[]>([]);
@@ -91,6 +93,7 @@ export function NewJobButton({ harnesses, repos }: { harnesses: readonly Harness
     form.reset(blank());
     setCreated(null);
     setFailure(null);
+    setSent(false);
     setImages((current) => {
       for (const image of current) URL.revokeObjectURL(image.preview);
       return [];
@@ -147,6 +150,7 @@ export function NewJobButton({ harnesses, repos }: { harnesses: readonly Harness
       const outcome = await createJob(values);
       if (outcome.ok) setCreated(outcome);
       else setFailure(outcome.message);
+      if (!outcome.ok && outcome.status === 502) setSent(true);
     });
   });
 
@@ -241,20 +245,26 @@ export function NewJobButton({ harnesses, repos }: { harnesses: readonly Harness
                         items={sourceItems}
                         value={field.value ?? "linear"}
                         onValueChange={(v) => field.onChange(v === null ? undefined : filingSourceSchema.parse(v))}
-                        disabled={images.length > 0}
+                        disabled={images.length > 0 || sent}
                       >
                         <SelectTrigger id="new-job-source" className="w-full">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectPopup>
                           {sourceItems.map((item) => (
-                            <SelectItem key={item.value} value={item.value}>
+                            <SelectItem key={item.value} value={item.value} disabled={item.value === "github" && repoItems.length === 0}>
                               {item.label}
                             </SelectItem>
                           ))}
                         </SelectPopup>
                       </Select>
-                      {images.length > 0 && <FieldDescription>Images go to Linear; remove them to file on GitHub.</FieldDescription>}
+                      {sent ? (
+                        <FieldDescription>This request was sent once, so it stays in {FILING_SOURCE_LABELS[source]}; cancel and start over to file it elsewhere.</FieldDescription>
+                      ) : images.length > 0 ? (
+                        <FieldDescription>Images go to Linear; remove them to file on GitHub.</FieldDescription>
+                      ) : (
+                        repoItems.length === 0 && <FieldDescription>GitHub Issues needs an enabled repository.</FieldDescription>
+                      )}
                     </Field>
                   )}
                 />
