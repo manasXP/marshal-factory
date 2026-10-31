@@ -55,6 +55,9 @@ const mine = async () => eq(jobs.machine_id, (await thisMachine()).id);
 export const IN_FLIGHT: Stage[] = ["queued", "triage", "investigating", "implementing", "verifying"];
 const STOPPABLE = STAGES.filter((stage) => canTransition(stage, "failed", "stop"));
 
+/** PR URLs GitHub reported closed without a merge, for `checkPullRequests`. A restart forgets them. */
+const closedPulls = new Set<string>();
+
 /**
  * Follows every factory PR: a merged one moves its job to merged, and one that conflicts with
  * main while its job sits in pr sends the thread back to merge main. The conflict is handled
@@ -62,8 +65,18 @@ const STOPPABLE = STAGES.filter((stage) => canTransition(stage, "failed", "stop"
  * checked on its own: one that fails (an uninstalled repo, a bad URL, a GitHub hiccup) is reported
  * and the next timer pass retries it, while the rest of this pass goes on. A job no machine holds,
  * such as a resume waiting for a fresh thread, has no thread to send back, but its merge counts.
+ * A PR GitHub reported closed without a merge is skipped by later passes of this process, so a
+ * failed or cancelled job's PR is not fetched again every tick; `recheckClosed` (a merge webhook)
+ * looks at them again, so a closed PR reopened and merged by hand still counts.
  */
-export async function checkPullRequests({ only }: { only?: readonly string[] } = {}) {
+export async function checkPullRequests({ only, recheckClosed = false }: { only?: readonly string[]; recheckClosed?: boolean } = {}) {
+  const skip = (prUrl: string) => !recheckClosed && closedPulls.has(prUrl);
+  const pullRequest = async (prUrl: string) => {
+    const pr = await github.pullRequest(prUrl);
+    if (pr.state === "closed") closedPulls.add(prUrl);
+    else closedPulls.delete(prUrl);
+    return pr;
+  };
   const open = parseJobs(
     await db
       .select()
@@ -76,9 +89,9 @@ export async function checkPullRequests({ only }: { only?: readonly string[] } =
   const each = async (key: string, prUrl: string, step: () => Promise<void>) =>
     step().catch((error: unknown) => void errors.push({ key, prUrl, error: error instanceof Error ? error.message : String(error) }));
 
-  for (const job of open) {
+  for (const job of open.filter((j) => !skip(j.pr_url!))) {
     await each(job.key, job.pr_url!, async () => {
-      const pr = await github.pullRequest(job.pr_url!);
+      const pr = await pullRequest(job.pr_url!);
       if (pr.state === "open" && pr.mergeable === "conflicting" && job.stage === "pr" && job.machine_id !== null) {
         if (await sendBackForConflict(job, pr.headSha)) conflicts.push(job.key);
         return;
@@ -87,9 +100,9 @@ export async function checkPullRequests({ only }: { only?: readonly string[] } =
     });
   }
 
-  for (const run of (await unclaimedRunsWithPr(db)).filter((r) => !only || only.includes(r.job_key!))) {
+  for (const run of (await unclaimedRunsWithPr(db)).filter((r) => (!only || only.includes(r.job_key!)) && !skip(r.pr_url!))) {
     await each(run.job_key!, run.pr_url!, async () => {
-      if ((await github.pullRequest(run.pr_url!)).state === "merged") await postMerged(run.job_key!, run.pr_url!, run.session_id);
+      if ((await pullRequest(run.pr_url!)).state === "merged") await postMerged(run.job_key!, run.pr_url!, run.session_id);
     });
   }
   return { conflicts, errors };

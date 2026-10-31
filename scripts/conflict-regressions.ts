@@ -61,12 +61,26 @@ try {
   assert.deepEqual(second.conflicts, [], "a second pass over the same head does nothing");
   assert.equal(errorFor(second, id), undefined, "and has nothing to post for it");
   assert.deepEqual(sent, ["thread-1"], "and sends nothing");
+
+  // A failed job's closed PR is fetched once, then left alone until a merge webhook looks again.
+  const closedUrl = `https://github.com/ski043/factory-demo/pull/${Date.now() + 1}`;
+  await db.insert(jobs).values(linearJob(`${id}-closed`, `closed-${id}`, { stage: "failed", pr_url: closedUrl, machine_id: TEST_MACHINE_ID }));
+  let closedFetches = 0;
+  github.pullRequest = async (url) => {
+    if (url === closedUrl) closedFetches++;
+    return { state: "closed", mergeable: "unknown", headSha: "closed", title: "t" };
+  };
+  await checkPullRequests({ only: [`closed-${id}`] });
+  await checkPullRequests({ only: [`closed-${id}`] });
+  assert.equal(closedFetches, 1, "a closed PR is not fetched again on the next pass");
+  await checkPullRequests({ only: [`closed-${id}`], recheckClosed: true });
+  assert.equal(closedFetches, 2, "a merge webhook's pass looks at closed PRs again");
   console.log("conflict regressions passed");
 } catch (error) {
   console.error(error);
   process.exitCode = 1;
 } finally {
-  await db.delete(jobs).where(inArray(jobs.id, [jid, bad.id]));
+  await db.delete(jobs).where(inArray(jobs.id, [jid, bad.id, jobId("linear", `${id}-closed`)]));
   await db.delete(runs).where(inArray(runs.session_id, [`${id}-loose`, `${id}-claimed`]));
   process.exit(process.exitCode ?? 0);
 }

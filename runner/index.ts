@@ -84,7 +84,7 @@ async function handle(intent: IntentRow) {
         synced: await writeBackPass(),
       };
     case "merged":
-      return { merged: await ops.checkPullRequests(), synced: await writeBackPass() };
+      return { merged: await ops.checkPullRequests({ recheckClosed: true }), synced: await writeBackPass() };
     case "recheck_conflicts":
       return { recheck: recheck.request() };
     case "open_t3":
