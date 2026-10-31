@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { homedir, tmpdir, userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { loadLimits } from "../lib/config";
 import { readRollout, ROLLOUT_PATH, startupVerdict, touchedInputs } from "../lib/rollout";
@@ -15,6 +15,8 @@ import { imageProblem, IMAGE_BUNDLES, readSandboxImage } from "../lib/sandbox";
 //   5. redeploy the ingest Function when its bundle's inputs changed since the last rollout
 //   6. rebuild the sandbox image when its pins drifted or its bundles' inputs changed since it was built
 //   7. reinstall the runner and wait for its first clean tick
+// The runner is the LaunchAgent, or the runner container when the checkout's compose project has one
+// (docs/runner-container.md): stopped with docker compose stop, started with docker compose up --build.
 // Then it records the commit in ~/.config/marshal-factory/rollout.json for the next run.
 //   bun scripts/rollout.ts [--wait] [--canary] [--force] [--checkout <path>]
 // --canary runs scripts/canary.ts afterwards. --force rolls out even when the commit was rolled out
@@ -39,13 +41,70 @@ class StepError extends Error {}
 let runnerStopped = flag(ALREADY_STOPPED);
 
 /** Runs a command in the checkout with its output shown, failing the rollout when it fails. */
-function run(command: string, commandArgs: string[]) {
-  log(`$ ${[command, ...commandArgs].join(" ")}`);
-  const result = spawnSync(command, commandArgs, { cwd: checkout, stdio: "inherit" });
+function run(command: string, commandArgs: string[], env: Record<string, string> = {}) {
+  log(`$ ${[...Object.entries(env).map(([k, v]) => `${k}=${v}`), command, ...commandArgs].join(" ")}`);
+  const result = spawnSync(command, commandArgs, { cwd: checkout, stdio: "inherit", env: { ...process.env, ...env } });
   if (result.status !== 0) throw new StepError(`${command} ${commandArgs.join(" ")} exited ${result.status ?? result.signal}`);
 }
 const read = (command: string, commandArgs: string[]) => execFileSync(command, commandArgs, { cwd: checkout, encoding: "utf8" }).trim();
 const git = (...gitArgs: string[]) => read("git", gitArgs);
+
+const LABEL = "com.marshal-factory.runner";
+const CONFIG_DIR = join(homedir(), ".config/marshal-factory");
+
+type Runner = { stop(): void; startAsIs(): void; start(commit: string): () => string; hint: string };
+
+const launchAgent: Runner = {
+  stop: () => run("bun", ["scripts/install-runner.ts", "--uninstall"]),
+  startAsIs: () => run("bun", ["scripts/install-runner.ts"]),
+  start() {
+    const offset = existsSync(LOG_PATH) ? statSync(LOG_PATH).size : 0;
+    run("bun", ["scripts/install-runner.ts"]);
+    return () => readFrom(LOG_PATH, offset);
+  },
+  hint: "bun scripts/install-runner.ts",
+};
+
+const runnerContainer: Runner = {
+  stop: () => run("docker", ["compose", "stop", "runner"]),
+  startAsIs: () => run("docker", ["compose", "start", "runner"]),
+  start(commit) {
+    const since = new Date().toISOString();
+    // The image has no .git, so the build takes the commit from FACTORY_COMMIT.
+    run("docker", ["compose", "up", "--detach", "--build", "runner"], { FACTORY_COMMIT: commit });
+    return () => read("docker", ["compose", "logs", "--no-log-prefix", "--since", since, "runner"]);
+  },
+  hint: "docker compose start runner",
+};
+
+/**
+ * The runner container when the checkout's compose project has one, running or stopped, else the
+ * LaunchAgent. Docker failing is no answer: guessing the LaunchAgent would put a second runner next to the container.
+ */
+async function pickRunner(): Promise<Runner> {
+  let ids: string;
+  try {
+    ids = read("docker", ["compose", "ps", "--all", "--quiet", "runner"]);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return launchAgent;
+    throw new StepError("docker compose ps failed, so it is unknown whether the runner is the container; start Docker and run the rollout again");
+  }
+  if (ids === "") return launchAgent;
+  if (spawnSync("launchctl", ["print", `gui/${userInfo().uid}/${LABEL}`], { stdio: "ignore" }).status === 0) {
+    throw new StepError(`both the runner container and the ${LABEL} LaunchAgent exist; remove one (docker compose down, or bun scripts/install-runner.ts --uninstall)`);
+  }
+  // The steps on this host read the config, the image record and the rollout record from ~/.config;
+  // they are the container's only when its compose mounts that directory, as a Mac's override does.
+  const config = JSON.parse(read("docker", ["compose", "config", "--format", "json"])) as { services: { runner: { volumes?: { source?: string; target: string }[] } } };
+  if (!config.services.runner.volumes?.some((v) => v.source === CONFIG_DIR && v.target === "/home/bun/.config/marshal-factory")) {
+    throw new StepError(`the runner container doesn't mount ${CONFIG_DIR}, so this host can't roll it out; update it by hand (docs/runner-container.md)`);
+  }
+  const { thisMachine } = await import(join(checkout, "runner/heartbeat.ts"));
+  if ((await thisMachine()).idFrom !== "config") throw new StepError(`set factory.machineId in ${CONFIG_DIR}/config.json, so this host counts the container's jobs`);
+  log("runner: the runner container");
+  return runnerContainer;
+}
+let runner: Runner | undefined;
 
 async function waitFor<T>(what: string, timeoutMs: number, everyMs: number, check: () => Promise<T | undefined> | T | undefined) {
   const deadline = Date.now() + timeoutMs;
@@ -92,22 +151,23 @@ async function beforePull() {
     return false;
   }
   log(`rolling out ${target.slice(0, 7)} to ${checkout}; last rollout ${last ? `${last.commit.slice(0, 7)} at ${last.at}` : "none recorded"}`);
-  await waitForVercel(target);
-
   process.chdir(checkout);
   process.loadEnvFile(".env.local");
+  runner = await pickRunner();
+  await waitForVercel(target);
+
   let busy = await inFlight();
   if (busy > 0 && !flag("--wait")) throw new StepError(`${busy} job(s) in flight on this machine; rerun with --wait to wait for them`);
   if (busy > 0) {
     log(`${busy} job(s) in flight; waiting until none is`);
     await waitFor("jobs in flight to finish", 6 * 3_600_000, 60_000, async () => ((busy = await inFlight()) === 0 ? true : undefined));
   }
-  run("bun", ["scripts/install-runner.ts", "--uninstall"]);
+  runner.stop();
   runnerStopped = true;
   // The runner may have claimed a job between the count and the stop.
   busy = await inFlight();
   if (busy > 0) {
-    run("bun", ["scripts/install-runner.ts"]);
+    runner.startAsIs();
     runnerStopped = false;
     throw new StepError(`a job was claimed while stopping the runner; it runs again, rerun the rollout${flag("--wait") ? "" : " with --wait"}`);
   }
@@ -140,6 +200,7 @@ function changedSince(commit: string | undefined) {
 async function afterPull() {
   process.chdir(checkout);
   process.loadEnvFile(".env.local");
+  runner = await pickRunner();
   const head = git("rev-parse", "HEAD");
   const last = readRollout();
 
@@ -165,12 +226,11 @@ async function afterPull() {
     } else log(`image: ${image.imageId} is current (built from ${image.factoryCommit.slice(0, 7)})`);
   }
 
-  const offset = existsSync(LOG_PATH) ? statSync(LOG_PATH).size : 0;
-  run("bun", ["scripts/install-runner.ts"]);
+  const logSinceStart = runner.start(head);
   runnerStopped = false;
   log("waiting for the runner's first tick");
   const verdict = await waitFor("the runner's first tick", 15 * 60_000, 5_000, () => {
-    const v = startupVerdict(readFrom(LOG_PATH, offset).split("\n"));
+    const v = startupVerdict(logSinceStart().split("\n"));
     return v.state === "waiting" ? undefined : v;
   });
   if (verdict.state === "failed") throw new StepError(`the runner came up unhealthy: ${verdict.why}`);
@@ -211,7 +271,7 @@ try {
   process.exit(0);
 } catch (error) {
   console.error(`rollout stopped: ${error instanceof Error ? error.message : String(error)}`);
-  if (runnerStopped) console.error("The runner is stopped. Fix the cause and run the rollout again, or start the runner as it is with bun scripts/install-runner.ts.");
+  if (runnerStopped) console.error(`The runner is stopped. Fix the cause and run the rollout again, or start the runner as it is with ${runner?.hint ?? launchAgent.hint}.`);
   if (!(error instanceof StepError) && error instanceof Error) console.error(error.stack);
   process.exit(1);
 }
